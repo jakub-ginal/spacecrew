@@ -46,7 +46,7 @@ def build_tree_menu(people_count, iss_groups, tiangong_groups):
     missions = []
     num = 1
 
-    iss_node = tree.add("[bold green]ISS[/bold green]")
+    iss_node = tree.add("ISS", style="bold green")
     for craft, members in iss_groups.items():
         m_node = iss_node.add(f"[bold cyan]{num}. {craft}[/bold cyan]")
         for m in members:
@@ -54,7 +54,7 @@ def build_tree_menu(people_count, iss_groups, tiangong_groups):
         missions.append((craft, members))
         num += 1
 
-    tiangong_node = tree.add("[bold sky_blue]Tiangong[/bold sky_blue]")
+    tiangong_node = tree.add("Tiangong", style="bold sky_blue1")
     for craft, members in tiangong_groups.items():
         m_node = tiangong_node.add(f"[bold cyan]{num}. {craft}[/bold cyan]")
         for m in members:
