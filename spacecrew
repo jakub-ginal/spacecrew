@@ -54,12 +54,12 @@ def build_tree_menu(people_count, iss_groups, tiangong_groups):
         missions.append((craft, members))
         num += 1
 
-    tiangong_node = tree.add("[bold red]Tiangong[/bold red]")
+    tiangong_node = tree.add("[bold deep_sky_blue]Tiangong[/bold deep_sky_blue]")
     for craft, members in tiangong_groups.items():
         m_node = tiangong_node.add(f"[bold cyan]{num}. {craft}[/bold cyan]")
         for m in members:
             m_node.add(f"{m.get('name')} ({m.get('country')})")
-        missions.append((craft, members))
+       / missions.append((craft, members))
         num += 1
 
     return tree, missions
