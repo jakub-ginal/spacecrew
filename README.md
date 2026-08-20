@@ -14,15 +14,15 @@ Spacecrew is a lightweight Python terminal program that shows who is in space ri
 
 Clone the repository and run the setup script to automatically install dependencies and configure the command:
 
-```
-git clone [https://github.com/xxx/spacecrew.git](https://github.com/xxx/spacecrew.git)
+```bash
+git clone https://github.com/jakub-ginal/spacecrew
 cd spacecrew
 chmod +x setup.sh
 ./setup.sh
 ```
 Or run it via this single command:
-```
-git clone [https://github.com/xxx/spacecrew.git](https://github.com/xxx/spacecrew.git) && cd spacecrew && bash setup.sh && hash -r && cd ~ && rm -rf ~/spacecrew
+```bash
+git clone https://github.com/jakub-ginal/spacecrew && cd spacecrew && bash setup.sh && hash -r && cd ~ && rm -rf ~/spacecrew
 ```
 ## Usage
 
@@ -32,6 +32,6 @@ Follow the interactive menu to select a mission or view specific astronaut detai
 ## Uninstall
 
 To completely remove the program and its configuration from your system, run:
-```
+```bash
 cd ~ && rm -rf ~/spacecrew && rm -f ~/.local/bin/spacecrew && hash -r
 ```
