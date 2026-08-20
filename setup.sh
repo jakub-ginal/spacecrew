@@ -1,7 +1,7 @@
 #!/bin/bash
 
-cp gdotstyle "$HOME/.local/bin/gdotstyle"
+cp gdotstyle "$HOME/.local/bin/spacecrew"
 
-chmod +x "$HOME/.local/bin/gdotstyle"
+chmod +x "$HOME/.local/bin/spacecrew"
 
-echo "gdotstyle installed successfully! You can now use it anywhere."
+echo "spacecrew installed successfully! You can now use it anywhere."
