@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cp gdotstyle "$HOME/.local/bin/spacecrew"
+cp spacecrew "$HOME/.local/bin/spacecrew"
 
 chmod +x "$HOME/.local/bin/spacecrew"
 
