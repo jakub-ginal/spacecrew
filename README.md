@@ -35,3 +35,6 @@ To completely remove the program and its configuration from your system, run:
 ```bash
 cd ~ && rm -rf ~/spacecrew && rm -f ~/.local/bin/spacecrew && hash -r
 ```
+## Data Source
+
+Data provided by [International Space Station APIs](https://github.com/corquaid/international-space-station-APIs) by **Cormac Quaid**.
