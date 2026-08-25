@@ -3,6 +3,11 @@ Spacecrew is a lightweight Python terminal program that shows who is in space ri
 
 <img width="792" height="582" alt="obraz" src="https://github.com/user-attachments/assets/f0595d9e-2cfc-40c7-ae9d-1a4ae780412d" />
 
+# spacecrew
+Spacecrew is a lightweight Python terminal program that shows who is in space right now.
+
+<img width="800" height="600" alt="92_1x_shots_so" src="https://github.com/user-attachments/assets/dfd95ad7-904d-4495-9c98-b8e1751ea5f3" />
+
 
 ## Tested Systems
 
@@ -29,6 +34,13 @@ git clone https://github.com/jakub-ginal/spacecrew && cd spacecrew && bash setup
 Simply type `spacecrew` anywhere in your terminal.
 Follow the interactive menu to select a mission or view specific astronaut details and photos.
 
+### Time in Space
+
+* **p (previous)**: Days from past missions.
+* **c (current)**: Days from the current mission (tracked live).
+<img width="800" height="600" alt="356_1x_shots_so" src="https://github.com/user-attachments/assets/a87a2e9d-3c5a-443c-b62f-ec19f2922f0d" />
+
+ 
 ## Uninstall
 
 To completely remove the program and its configuration from your system, run:
