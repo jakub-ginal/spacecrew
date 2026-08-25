@@ -3,6 +3,8 @@
 
 import os
 import subprocess
+import time
+from datetime import datetime
 import requests
 from collections import defaultdict
 from rich.console import Console
@@ -46,25 +48,21 @@ def build_tree_menu(people_count, iss_groups, tiangong_groups):
     missions = []
     num = 1
 
-    iss_node = tree.add("ISS", style="bold green")
+    iss_node = tree.add("[bold green]ISS[/bold green]")
     for craft, members in iss_groups.items():
         m_node = iss_node.add(f"[bold cyan]{num}. {craft}[/bold cyan]")
         for m in members:
-
-            m_node.add(f"[white]{m.get('name')} ({m.get('country')})[/white]")
+            m_node.add(f"{m.get('name')} ({m.get('country')})")
         missions.append((craft, members))
         num += 1
 
-    tiangong_node = tree.add("Tiangong", style="bold sky_blue1")
+    tiangong_node = tree.add("[bold deep_sky_blue]Tiangong[/bold deep_sky_blue]")
     for craft, members in tiangong_groups.items():
         m_node = tiangong_node.add(f"[bold cyan]{num}. {craft}[/bold cyan]")
         for m in members:
-
-            m_node.add(f"[white]{m.get('name')} ({m.get('country')})[/white]")
+            m_node.add(f"{m.get('name')} ({m.get('country')})")
         missions.append((craft, members))
         num += 1
-
-    return tree, missions
 
     return tree, missions
 
@@ -101,6 +99,19 @@ def create_mission_table(craft, members):
 
     return table
 
+def calculate_space_experience(launched_timestamp, previous_days):
+    if not launched_timestamp:
+        return "N/A", f"{previous_days} days"
+    
+    dt = datetime.fromtimestamp(launched_timestamp)
+    launched_str = dt.strftime("%Y-%m-%d %H:%M UTC")
+    
+    current_mission_days = (time.time() - launched_timestamp) / 86400
+    total_days = previous_days + current_mission_days
+    
+    total_str = f"{total_days:.1f} days ({previous_days}p + {current_mission_days:.1f}c)"
+    return launched_str, total_str
+
 def create_profile_table(person):
     table = Table(title=f"Profile: {person.get('name')}")
     table.add_column("Property", style="cyan")
@@ -110,6 +121,13 @@ def create_profile_table(person):
     table.add_row("Position", str(person.get("position") or "N/A"))
     table.add_row("Agency", str(person.get("agency") or "N/A"))
     table.add_row("Spacecraft", str(person.get("spacecraft") or "N/A"))
+
+    launched_ts = person.get("launched")
+    prev_days = person.get("days_in_space", 0)
+    launched_date, total_experience = calculate_space_experience(launched_ts, prev_days)
+
+    table.add_row("Launched At", launched_date)
+    table.add_row("Time in Space", total_experience)
 
     links = [
         ("Image URL", person.get("image")),
