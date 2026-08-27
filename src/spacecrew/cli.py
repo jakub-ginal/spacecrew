@@ -1,10 +1,12 @@
 import os
-import subprocess
 import time
 from collections import defaultdict
 from datetime import datetime
+from io import BytesIO
 
+import chafa
 import requests
+from PIL import Image
 from rich.columns import Columns
 from rich.console import Console
 from rich.panel import Panel
@@ -76,18 +78,23 @@ def fetch_photo_panel(url):
     try:
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
         if res.status_code == 200:
-            with open("temp.jpg", "wb") as f:
-                f.write(res.content)
+            img = Image.open(BytesIO(res.content)).convert("RGB")
+            width, height = img.size
+            pixels = img.tobytes()
 
-            out = subprocess.check_output(["chafa", "--size=28x16", "temp.jpg"]).decode("utf-8")
+            config = chafa.CanvasConfig()
+            config.width = 28
+            config.height = 16
 
-            if os.path.exists("temp.jpg"):
-                os.remove("temp.jpg")
+            canvas = chafa.Canvas(config)
+            canvas.draw_all_pixels(
+                chafa.PixelType.CHAFA_PIXEL_RGB8, pixels, width, height, width * 3
+            )
+            out = canvas.print().decode("utf-8")
 
             return Panel(Text.from_ansi(out), title="Photo", expand=False)
     except Exception:
-        if os.path.exists("temp.jpg"):
-            os.remove("temp.jpg")
+        pass
 
     return Panel(Text("No photo", style="dim red"), title="Photo", expand=False)
 
