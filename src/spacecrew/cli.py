@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -16,9 +17,19 @@ from rich.tree import Tree
 
 console = Console()
 
+WIKIMEDIA_THUMB_WIDTH: int = 250
+
 
 def clear_screen():
     os.system("clear")
+
+
+def to_thumb_url(original_url: str, width: int) -> str:
+    m = re.match(r"(.*/commons)/(\w/\w\w)/([^/]+)$", original_url)
+    if not m:
+        raise ValueError(f"unexpected commons URL format {original_url}")
+    base, hashpath, filename = m.groups()
+    return f"{base}/thumb/{hashpath}/{filename}/{width}px-{filename}"
 
 
 def fetch_space_data():
@@ -160,7 +171,10 @@ def create_profile_table(person):
 
 def show_astronaut_view(person):
     clear_screen()
-    photo_panel = fetch_photo_panel(person.get("image"))
+    img_url = person.get("image")
+    if "thumb" not in img_url:
+        img_url = to_thumb_url(img_url, WIKIMEDIA_THUMB_WIDTH)
+    photo_panel = fetch_photo_panel(img_url)
     profile_table = create_profile_table(person)
     console.print(Columns([photo_panel, profile_table]))
     input("\nPress Enter to return to menu...")
