@@ -1,23 +1,23 @@
-#!/usr/bin/env python3
-#JG code
-
 import os
 import subprocess
 import time
-from datetime import datetime
-import requests
 from collections import defaultdict
-from rich.console import Console
-from rich.tree import Tree
-from rich.table import Table
-from rich.panel import Panel
+from datetime import datetime
+
+import requests
 from rich.columns import Columns
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
+from rich.tree import Tree
 
 console = Console()
 
+
 def clear_screen():
     os.system("clear")
+
 
 def fetch_space_data():
     url = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
@@ -29,6 +29,7 @@ def fetch_space_data():
     except Exception:
         pass
     return None
+
 
 def group_people_by_station(people):
     iss_groups = defaultdict(list)
@@ -42,6 +43,7 @@ def group_people_by_station(people):
             tiangong_groups[craft].append(p)
 
     return iss_groups, tiangong_groups
+
 
 def build_tree_menu(people_count, iss_groups, tiangong_groups):
     tree = Tree(f"[bold white]PEOPLE IN SPACE ({people_count})[/bold white]")
@@ -66,6 +68,7 @@ def build_tree_menu(people_count, iss_groups, tiangong_groups):
 
     return tree, missions
 
+
 def fetch_photo_panel(url):
     if not url:
         return Panel(Text("No photo", style="dim red"), title="Photo", expand=False)
@@ -88,6 +91,7 @@ def fetch_photo_panel(url):
 
     return Panel(Text("No photo", style="dim red"), title="Photo", expand=False)
 
+
 def create_mission_table(craft, members):
     table = Table(title=f"Mission: {craft}")
     table.add_column("No.", style="cyan", justify="right")
@@ -99,18 +103,20 @@ def create_mission_table(craft, members):
 
     return table
 
+
 def calculate_space_experience(launched_timestamp, previous_days):
     if not launched_timestamp:
         return "N/A", f"{previous_days} days"
-    
+
     dt = datetime.fromtimestamp(launched_timestamp)
     launched_str = dt.strftime("%Y-%m-%d %H:%M UTC")
-    
+
     current_mission_days = (time.time() - launched_timestamp) / 86400
     total_days = previous_days + current_mission_days
-    
+
     total_str = f"{total_days:.1f} days ({previous_days}p + {current_mission_days:.1f}c)"
     return launched_str, total_str
+
 
 def create_profile_table(person):
     table = Table(title=f"Profile: {person.get('name')}")
@@ -133,7 +139,7 @@ def create_profile_table(person):
         ("Image URL", person.get("image")),
         ("Wikipedia", person.get("url")),
         ("X (Twitter)", person.get("twitter")),
-        ("Instagram", person.get("instagram"))
+        ("Instagram", person.get("instagram")),
     ]
 
     for label, link_url in links:
@@ -144,6 +150,7 @@ def create_profile_table(person):
 
     return table
 
+
 def show_astronaut_view(person):
     clear_screen()
     photo_panel = fetch_photo_panel(person.get("image"))
@@ -151,10 +158,11 @@ def show_astronaut_view(person):
     console.print(Columns([photo_panel, profile_table]))
     input("\nPress Enter to return to menu...")
 
+
 def handle_mission_view(craft, members):
     clear_screen()
     console.print(create_mission_table(craft, members))
-    
+
     astro_choice = input("\nSelect astronaut number (or 'menu'/'quit'): ").strip().lower()
 
     if astro_choice == "quit":
@@ -166,8 +174,9 @@ def handle_mission_view(craft, members):
         a_idx = int(astro_choice) - 1
         if 0 <= a_idx < len(members):
             show_astronaut_view(members[a_idx])
-            
+
     return "ok"
+
 
 def main():
     while True:
@@ -197,6 +206,7 @@ def main():
                 result = handle_mission_view(craft, members)
                 if result == "quit":
                     break
+
 
 if __name__ == "__main__":
     main()
