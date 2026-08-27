@@ -12,17 +12,18 @@ Spacecrew is a lightweight Python terminal program that shows who is in space ri
 
 ## Installation
 
-Clone the repository and run the setup script to automatically install dependencies and configure the command:
+Install from PyPI:
+
+```bash
+pip install spacecrew
+```
+
+Or install from source with [pipx](https://pipx.pypa.io/):
 
 ```bash
 git clone https://github.com/jakub-ginal/spacecrew
 cd spacecrew
-chmod +x setup.sh
-./setup.sh
-```
-Or run it via this single command:
-```bash
-git clone https://github.com/jakub-ginal/spacecrew && cd spacecrew && bash setup.sh && hash -r && cd ~ && rm -rf ~/spacecrew
+pipx install .
 ```
 ## Usage
 
@@ -35,12 +36,12 @@ Follow the interactive menu to select a mission or view specific astronaut detai
 * **c (current)**: Days from the current mission (tracked live).
 <img width="800" height="600" alt="356_1x_shots_so" src="https://github.com/user-attachments/assets/a87a2e9d-3c5a-443c-b62f-ec19f2922f0d" />
 
- 
+
 ## Uninstall
 
-To completely remove the program and its configuration from your system, run:
+To completely remove the program, run:
 ```bash
-cd ~ && rm -rf ~/spacecrew && rm -f ~/.local/bin/spacecrew && hash -r
+pip uninstall spacecrew
 ```
 ## Data Source
 
