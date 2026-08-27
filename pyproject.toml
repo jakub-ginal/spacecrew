@@ -1,0 +1,22 @@
+[project]
+name = "spacecrew"
+version = "0.0.1"
+description = "Check who is in space right now"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Jakub Ginał" }]
+dependencies = [
+    "rich>=13.0",
+    "requests>=2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jakub-ginal/spacecrew"
+
+[project.scripts]
+spacecrew = "spacecrew:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
