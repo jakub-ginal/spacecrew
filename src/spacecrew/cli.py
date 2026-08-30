@@ -1,3 +1,4 @@
+import importlib.metadata
 import os
 import re
 import time
@@ -20,6 +21,20 @@ console = Console()
 WIKIMEDIA_THUMB_WIDTH: int = 250
 
 
+def _spacecrew_version() -> str:
+    try:
+        return importlib.metadata.version("spacecrew")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+USER_AGENT = (
+    f"spacecrew/{_spacecrew_version()} "
+    f"(https://github.com/jakub-ginal/spacecrew) "
+    f"requests/{requests.__version__}"
+)
+
+
 def clear_screen():
     os.system("clear")
 
@@ -35,7 +50,7 @@ def to_thumb_url(original_url: str, width: int) -> str:
 def fetch_with_retry(url, headers=None, timeout=5, max_retries=3, backoff_factor=1):
     """Fetch URL with retry on 429 (rate limit) responses."""
     if headers is None:
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": USER_AGENT}
 
     for attempt in range(max_retries):
         try:
@@ -57,9 +72,8 @@ def fetch_with_retry(url, headers=None, timeout=5, max_retries=3, backoff_factor
 
 def fetch_space_data():
     url = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
-    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        res = fetch_with_retry(url, headers=headers, timeout=5)
+        res = fetch_with_retry(url, timeout=5)
         if res and res.status_code == 200:
             return res.json()["people"]
     except Exception:
@@ -110,7 +124,7 @@ def fetch_photo_panel(url):
         return Panel(Text("No photo", style="dim red"), title="Photo", expand=False)
 
     try:
-        res = fetch_with_retry(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        res = fetch_with_retry(url, timeout=5)
         if res and res.status_code == 200:
             img = Image.open(BytesIO(res.content)).convert("RGB")
             width, height = img.size
