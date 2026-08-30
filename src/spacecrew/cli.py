@@ -32,12 +32,35 @@ def to_thumb_url(original_url: str, width: int) -> str:
     return f"{base}/thumb/{hashpath}/{filename}/{width}px-{filename}"
 
 
+def fetch_with_retry(url, headers=None, timeout=5, max_retries=3, backoff_factor=1):
+    """Fetch URL with retry on 429 (rate limit) responses."""
+    if headers is None:
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+    for attempt in range(max_retries):
+        try:
+            res = requests.get(url, headers=headers, timeout=timeout)
+            if res.status_code == 200:
+                return res
+            elif res.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = backoff_factor * (2 ** attempt)
+                    time.sleep(wait_time)
+                    continue
+            return res
+        except requests.RequestException:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(backoff_factor * (2 ** attempt))
+    return None
+
+
 def fetch_space_data():
     url = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
+        res = fetch_with_retry(url, headers=headers, timeout=5)
+        if res and res.status_code == 200:
             return res.json()["people"]
     except Exception:
         pass
@@ -87,8 +110,8 @@ def fetch_photo_panel(url):
         return Panel(Text("No photo", style="dim red"), title="Photo", expand=False)
 
     try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
-        if res.status_code == 200:
+        res = fetch_with_retry(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        if res and res.status_code == 200:
             img = Image.open(BytesIO(res.content)).convert("RGB")
             width, height = img.size
             pixels = img.tobytes()
