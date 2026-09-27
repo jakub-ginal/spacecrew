@@ -236,6 +236,58 @@ def handle_mission_view(craft, members):
     return "ok"
 
 
+def fetch_apod():
+    url = "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY"
+    try:
+        res = fetch_with_retry(url, timeout=10)
+        if res and res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return None
+
+
+def show_apod_view():
+    clear_screen()
+    console.print("[bold cyan]Fetching NASA Astronomy Picture of the Day...[/bold cyan]\n")
+
+    apod = fetch_apod()
+    if not apod:
+        console.print("[bold red]Error: Could not fetch APOD data[/bold red]")
+        input("\nPress Enter to return to menu...")
+        return
+
+    title = apod.get("title", "Unknown")
+    date = apod.get("date", "Unknown")
+    explanation = apod.get("explanation", "No explanation available")
+    media_type = apod.get("media_type", "image")
+    url = apod.get("url", "")
+    hdurl = apod.get("hdurl", "")
+    copyright_text = apod.get("copyright", "")
+
+    if media_type == "image":
+        img_url = hdurl if hdurl else url
+        photo_panel = fetch_photo_panel(img_url)
+    else:
+        photo_panel = Panel(Text(f"[Video] {url}", style="dim yellow"), title="Media", expand=False)
+
+    info_text = Text()
+    info_text.append(f"Title: ", style="bold cyan")
+    info_text.append(f"{title}\n", style="white")
+    info_text.append(f"Date: ", style="bold cyan")
+    info_text.append(f"{date}\n", style="white")
+    if copyright_text:
+        info_text.append(f"Copyright: ", style="bold cyan")
+        info_text.append(f"{copyright_text}\n", style="white")
+    info_text.append(f"\nExplanation:\n", style="bold cyan")
+    info_text.append(explanation, style="white")
+
+    info_panel = Panel(info_text, title="APOD Info", expand=False)
+
+    console.print(Columns([photo_panel, info_panel]))
+    input("\nPress Enter to return to menu...")
+
+
 def main():
     while True:
         clear_screen()
@@ -250,11 +302,15 @@ def main():
         tree, missions = build_tree_menu(len(people), iss_groups, tiangong_groups)
 
         console.print(tree)
+        console.print("\n[bold yellow]Commands:[/bold yellow] [cyan]a/apod[/cyan] - NASA Astronomy Picture of the Day  [cyan]quit[/cyan] - Exit")
         choice = input("\n> ").strip().lower()
 
         if choice == "quit":
             break
         elif choice == "menu":
+            continue
+        elif choice in ("a", "apod"):
+            show_apod_view()
             continue
 
         if choice.isdigit():
