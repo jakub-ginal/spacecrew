@@ -2,9 +2,11 @@ import importlib.metadata
 import os
 import re
 import time
+import webbrowser
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
+from typing import Any
 
 import chafa
 import requests
@@ -19,6 +21,9 @@ from rich.tree import Tree
 console = Console()
 
 WIKIMEDIA_THUMB_WIDTH: int = 250
+
+# In-memory session cache for APOD (no disk usage)
+_apod_cache: dict[str, dict] = {}
 
 
 def _spacecrew_version() -> str:
@@ -236,90 +241,433 @@ def handle_mission_view(craft, members):
     return "ok"
 
 
-def fetch_apod():
-    url = "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY"
+def get_nasa_api_key() -> str:
+    return os.getenv("NASA_API_KEY", "DEMO_KEY")
+
+
+def fetch_apod_date(target_date: str | None):
+    """Fetch APOD for specific date (YYYY-MM-DD) or today if None."""
+    cache_key = target_date or "today"
+    if cache_key in _apod_cache:
+        return _apod_cache[cache_key]
+
+    base_url = "https://api.nasa.gov/planetary/apod"
+    params = {"api_key": get_nasa_api_key()}
+    if target_date:
+        params["date"] = target_date
+
+    url = f"{base_url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
     try:
         res = fetch_with_retry(url, timeout=10)
         if res and res.status_code == 200:
-            return res.json()
+            data = res.json()
+            _apod_cache[cache_key] = data
+            return data
     except Exception:
         pass
     return None
 
 
-def show_apod_view():
-    clear_screen()
-    console.print("[bold cyan]Fetching NASA Astronomy Picture of the Day...[/bold cyan]\n")
+def show_apod_view(target_date: str | None = None):
+    while True:
+        clear_screen()
+        date_label = target_date or "today"
+        console.print(f"[bold cyan]Fetching NASA APOD for {date_label}...[/bold cyan]\n")
 
-    apod = fetch_apod()
-    if not apod:
-        console.print("[bold red]Error: Could not fetch APOD data[/bold red]")
+        apod = fetch_apod_date(target_date)
+        if not apod:
+            console.print("[bold red]Error: Could not fetch APOD data[/bold red]")
+            input("\nPress Enter to return to menu...")
+            return
+
+        title = apod.get("title", "Unknown")
+        date = apod.get("date", "Unknown")
+        explanation = apod.get("explanation", "No explanation available")
+        media_type = apod.get("media_type", "image")
+        url = apod.get("url", "")
+        hdurl = apod.get("hdurl", "")
+        copyright_text = apod.get("copyright", "")
+        author = apod.get("author", "")  # Not always present
+
+        if media_type == "image":
+            img_url = hdurl if hdurl else url
+            photo_panel = fetch_photo_panel(img_url)
+        else:
+            photo_panel = Panel(Text(f"[Video] {url}", style="dim yellow"), title="Media", expand=False)
+
+        info_text = Text()
+        info_text.append(f"Title: ", style="bold cyan")
+        info_text.append(f"{title}\n", style="white")
+        info_text.append(f"Date: ", style="bold cyan")
+        info_text.append(f"{date}\n", style="white")
+        if author:
+            info_text.append(f"Author: ", style="bold cyan")
+            info_text.append(f"{author}\n", style="white")
+        if copyright_text:
+            info_text.append(f"Copyright: ", style="bold cyan")
+            info_text.append(f"{copyright_text}\n", style="white")
+        if hdurl:
+            info_text.append(f"HD URL: ", style="bold cyan")
+            info_text.append(f"[link={hdurl}]Open in browser[/link]\n", style="blue")
+        info_text.append(f"\nExplanation:\n", style="bold cyan")
+        info_text.append(explanation, style="white")
+
+        info_panel = Panel(info_text, title="APOD Info", expand=False)
+
+        console.print(Columns([photo_panel, info_panel]))
+
+        actions = []
+        if media_type == "image" and hdurl:
+            actions.append("[cyan]o[/cyan] - Open HD in browser")
+        actions.append("[cyan]p[/cyan] - Previous day")
+        actions.append("[cyan]Enter[/cyan] - Back to menu")
+
+        console.print(f"\n[bold yellow]Actions:[/bold yellow]  {'  '.join(actions)}")
+        action = input("> ").strip().lower()
+
+        if action == "o" and media_type == "image" and hdurl:
+            webbrowser.open(hdurl)
+            console.print("[green]Opened in browser[/green]")
+            time.sleep(1)
+        elif action == "p":
+            # Calculate previous day
+            try:
+                current = datetime.fromisoformat(date) if date != "Unknown" else datetime.now()
+            except ValueError:
+                current = datetime.now()
+            prev_date = (current - timedelta(days=1)).date().isoformat()
+            target_date = prev_date
+            continue
+        else:
+            return
+
+
+# Launches feature
+LAUNCHES_API_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
+_launches_cache: list[dict] | None = None
+
+
+def fetch_launches(limit: int = 15) -> list[dict]:
+    """Fetch upcoming launches from The Space Devs API."""
+    global _launches_cache
+    if _launches_cache is not None:
+        return _launches_cache
+
+    params = {
+        "limit": limit,
+        "mode": "compact",
+        "ordering": "window_start",
+    }
+    url = f"{LAUNCHES_API_URL}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+
+    try:
+        res = fetch_with_retry(url, timeout=10)
+        if res and res.status_code == 200:
+            data = res.json()
+            launches = data.get("results", [])
+            _launches_cache = launches
+            return launches
+    except Exception:
+        pass
+    return []
+
+
+def format_launch_datetime(iso_str: str) -> str:
+    """Format ISO datetime to readable local time."""
+    if not iso_str:
+        return "TBD"
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return iso_str
+
+
+def format_launch_status(status: dict) -> str:
+    """Format launch status with color."""
+    if not status:
+        return "[dim]Unknown[/dim]"
+    name = status.get("name", "Unknown")
+    status_id = status.get("id", 0)
+    if status_id == 1:
+        return f"[bold green]{name}[/bold green]"
+    elif status_id == 2:
+        return f"[bold yellow]{name}[/bold yellow]"
+    elif status_id == 3:
+        return f"[bold red]{name}[/bold red]"
+    elif status_id == 4:
+        return f"[dim]{name}[/dim]"
+    return name
+
+
+def create_launches_table(launches: list[dict]) -> Table:
+    """Create table for launches list - compact single-line format."""
+    table = Table(title="Upcoming Launches", show_header=True, header_style="bold cyan", expand=True)
+    table.add_column("#", style="cyan", justify="right", width=4, no_wrap=True)
+    table.add_column("Mission", style="bold white", min_width=40, overflow="fold")
+    table.add_column("Rocket / Provider", style="green", min_width=25, overflow="fold")
+    table.add_column("Date (UTC)", style="white", width=18, no_wrap=True)
+    table.add_column("Status", style="white", width=12, no_wrap=True)
+
+    for idx, launch in enumerate(launches, 1):
+        mission = launch.get("name", "Unknown")
+        rocket = launch.get("rocket", {}).get("configuration", {}).get("name", "TBD")
+        provider = launch.get("launch_service_provider", {}).get("name", "TBD")
+        window_start = format_launch_datetime(launch.get("window_start", ""))
+        status = format_launch_status(launch.get("status", {}))
+
+        rocket_provider = f"{rocket} / {provider}"
+
+        table.add_row(
+            str(idx),
+            mission,
+            rocket_provider,
+            window_start,
+            status,
+        )
+
+    return table
+
+
+def create_launches_panel_list(launches: list[dict]) -> list:
+    """Create a list of Panels for each launch - cleaner than table."""
+    from rich.panel import Panel
+    from rich.text import Text
+
+    panels = []
+    for idx, launch in enumerate(launches, 1):
+        mission = launch.get("name", "Unknown")
+        rocket = launch.get("rocket", {}).get("configuration", {}).get("name", "TBD")
+        provider = launch.get("launch_service_provider", {}).get("name", "TBD")
+        window_start = format_launch_datetime(launch.get("window_start", ""))
+        status = launch.get("status", {}).get("name", "Unknown")
+        status_id = launch.get("status", {}).get("id", 0)
+
+        # Color based on status
+        if status_id == 1:
+            status_style = "bold green"
+        elif status_id == 2:
+            status_style = "bold yellow"
+        elif status_id == 3:
+            status_style = "bold red"
+        else:
+            status_style = "dim"
+
+        text = Text()
+        text.append(f"{idx}. ", style="bold cyan")
+        text.append(f"{mission}\n", style="bold white")
+        text.append(f"    {rocket} / {provider}\n", style="green")
+        text.append(f"    {window_start}  ", style="white")
+        text.append(f"[{status}]", style=status_style)
+
+        panels.append(Panel(text, border_style="dim", padding=(0, 1)))
+
+    return panels
+
+
+def create_launch_detail_table(launch: dict) -> Table:
+    """Create detailed table for a single launch."""
+    table = Table(title=f"Launch Details: {launch.get('name', 'Unknown')}", show_header=True, expand=True)
+    table.add_column("Property", style="cyan", width=22, no_wrap=True)
+    table.add_column("Value", style="white")
+
+    # Basic info
+    table.add_row("Mission", launch.get("name", "N/A"))
+    desc = launch.get("description", "N/A")
+    if desc and len(desc) > 300:
+        desc = desc[:300] + "..."
+    table.add_row("Description", desc)
+
+    # Rocket
+    rocket = launch.get("rocket", {}).get("configuration", {})
+    table.add_row("Rocket", rocket.get("name", "N/A"))
+    table.add_row("Rocket Family", rocket.get("family", "N/A"))
+    table.add_row("Variant", rocket.get("variant", "N/A"))
+
+    # Provider
+    provider = launch.get("launch_service_provider", {})
+    table.add_row("Provider", provider.get("name", "N/A"))
+    table.add_row("Provider Type", provider.get("type", "N/A"))
+
+    # Pad & Location
+    pad = launch.get("pad", {})
+    table.add_row("Launch Pad", pad.get("name", "N/A"))
+    location = pad.get("location", {})
+    table.add_row("Location", f"{location.get('name', 'N/A')}, {location.get('country_code', 'N/A')}")
+
+    # Times
+    table.add_row("Window Start", format_launch_datetime(launch.get("window_start", "")))
+    table.add_row("Window End", format_launch_datetime(launch.get("window_end", "")))
+
+    # Status
+    status = launch.get("status", {})
+    table.add_row("Status", status.get("name", "N/A"))
+    table.add_row("Status Description", status.get("description", "N/A"))
+
+    # Links
+    has_links = False
+    if launch.get("webcast_live") and launch.get("streams"):
+        streams = launch.get("streams", [])
+        if streams:
+            table.add_row("Webcast", f"[link={streams[0].get('url', '')}]Watch Live[/link]")
+            has_links = True
+
+    if launch.get("video_url"):
+        table.add_row("Video URL", f"[link={launch.get('video_url')}]Open[/link]")
+        has_links = True
+
+    if launch.get("info_url"):
+        table.add_row("Info URL", f"[link={launch.get('info_url')}]Open[/link]")
+        has_links = True
+
+    if launch.get("wiki_url"):
+        table.add_row("Wikipedia", f"[link={launch.get('wiki_url')}]Open[/link]")
+        has_links = True
+
+    # Image
+    if launch.get("image"):
+        table.add_row("Mission Patch", f"[link={launch.get('image')}]View Image[/link]")
+        has_links = True
+
+    if not has_links:
+        table.add_row("Links", "[dim]No links available yet[/dim]")
+
+    return table
+
+
+def show_launches_list():
+    """Show list of upcoming launches."""
+    clear_screen()
+    console.print("[bold cyan]Fetching upcoming launches...[/bold cyan]\n")
+
+    launches = fetch_launches()
+    if not launches:
+        console.print("[bold red]Error: Could not fetch launches data[/bold red]")
         input("\nPress Enter to return to menu...")
         return
 
-    title = apod.get("title", "Unknown")
-    date = apod.get("date", "Unknown")
-    explanation = apod.get("explanation", "No explanation available")
-    media_type = apod.get("media_type", "image")
-    url = apod.get("url", "")
-    hdurl = apod.get("hdurl", "")
-    copyright_text = apod.get("copyright", "")
+    while True:
+        clear_screen()
+        panels = create_launches_panel_list(launches)
+        for panel in panels:
+            console.print(panel)
+        console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]1-{n}[/cyan] - Details  [cyan]r[/cyan] - Refresh  [cyan]Enter[/cyan] - Back".format(n=len(launches)))
+        choice = input("> ").strip().lower()
 
-    if media_type == "image":
-        img_url = hdurl if hdurl else url
-        photo_panel = fetch_photo_panel(img_url)
-    else:
-        photo_panel = Panel(Text(f"[Video] {url}", style="dim yellow"), title="Media", expand=False)
+        if not choice:
+            return
+        if choice == "r":
+            global _launches_cache
+            _launches_cache = None
+            console.print("[dim]Refreshing...[/dim]")
+            time.sleep(1)
+            return show_launches_list()
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(launches):
+                show_launch_detail(launches[idx])
 
-    info_text = Text()
-    info_text.append(f"Title: ", style="bold cyan")
-    info_text.append(f"{title}\n", style="white")
-    info_text.append(f"Date: ", style="bold cyan")
-    info_text.append(f"{date}\n", style="white")
-    if copyright_text:
-        info_text.append(f"Copyright: ", style="bold cyan")
-        info_text.append(f"{copyright_text}\n", style="white")
-    info_text.append(f"\nExplanation:\n", style="bold cyan")
-    info_text.append(explanation, style="white")
 
-    info_panel = Panel(info_text, title="APOD Info", expand=False)
+def show_launch_detail(launch: dict):
+    """Show detailed view of a launch."""
+    while True:
+        clear_screen()
+        console.print(create_launch_detail_table(launch))
 
-    console.print(Columns([photo_panel, info_panel]))
-    input("\nPress Enter to return to menu...")
+        console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]w[/cyan] - Open webcast  [cyan]Enter[/cyan] - Back")
+        choice = input("> ").strip().lower()
+
+        if choice == "w" and launch.get("webcast_live") and launch.get("streams"):
+            url = launch["streams"][0].get("url", "")
+            if url:
+                webbrowser.open(url)
+                console.print("[green]Opened webcast in browser[/green]")
+                time.sleep(1)
+        else:
+            return
+
+
+def show_main_menu():
+    """Show main menu with 3 options."""
+    from rich.align import Align
+    from rich.panel import Panel
+    from rich.text import Text
+
+    menu_text = Text()
+    menu_text.append("         SPACECREW", style="bold white")
+    menu_text.append("\n\n")
+    menu_text.append("  1 ", style="bold white")
+    menu_text.append("People in Space", style="cyan")
+    menu_text.append("\n")
+    menu_text.append("  2 ", style="bold white")
+    menu_text.append("NASA APOD", style="cyan")
+    menu_text.append("\n")
+    menu_text.append("  3 ", style="bold white")
+    menu_text.append("Upcoming Launches", style="cyan")
+    menu_text.append("\n")
+    menu_text.append("  4 ", style="bold white")
+    menu_text.append("Exit", style="cyan")
+
+    panel = Panel(
+        Align.center(menu_text),
+        border_style="white",
+        title_align="center",
+    )
+    console.print(panel)
+
+
+def handle_people_in_space():
+    """Handle the people in space workflow."""
+    clear_screen()
+    people = fetch_space_data()
+
+    if people is None:
+        console.print("[bold red]Error: No internet connection. Please check your network and try again.[/bold red]")
+        input("\nPress Enter to return to menu...")
+        return
+
+    iss_groups, tiangong_groups = group_people_by_station(people)
+    tree, missions = build_tree_menu(len(people), iss_groups, tiangong_groups)
+
+    console.print(tree)
+    console.print("\n[bold yellow]Commands:[/bold yellow] [cyan]menu[/cyan] - Back  [cyan]quit[/cyan] - Exit")
+    choice = input("\n> ").strip().lower()
+
+    if choice == "quit":
+        return "quit"
+    elif choice == "menu":
+        return "menu"
+
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(missions):
+            craft, members = missions[idx]
+            result = handle_mission_view(craft, members)
+            if result == "quit":
+                return "quit"
+    return "ok"
 
 
 def main():
     while True:
         clear_screen()
-        people = fetch_space_data()
+        show_main_menu()
+        console.print()
+        choice = console.input("[bold cyan]Select option [1-4]: [/bold cyan]").strip().lower()
 
-        if people is None:
-            console.print("[bold red]Error: No internet connection. Please check your network and try again.[/bold red]")
-            input("\nPress Enter to retry...")
-            continue
-
-        iss_groups, tiangong_groups = group_people_by_station(people)
-        tree, missions = build_tree_menu(len(people), iss_groups, tiangong_groups)
-
-        console.print(tree)
-        console.print("\n[bold yellow]Commands:[/bold yellow] [cyan]a/apod[/cyan] - NASA Astronomy Picture of the Day  [cyan]quit[/cyan] - Exit")
-        choice = input("\n> ").strip().lower()
-
-        if choice == "quit":
+        if choice in ("4", "quit", "exit", "q"):
             break
-        elif choice == "menu":
-            continue
-        elif choice in ("a", "apod"):
+        elif choice == "1":
+            result = handle_people_in_space()
+            if result == "quit":
+                break
+        elif choice == "2":
             show_apod_view()
-            continue
-
-        if choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(missions):
-                craft, members = missions[idx]
-                result = handle_mission_view(craft, members)
-                if result == "quit":
-                    break
+        elif choice == "3":
+            show_launches_list()
+        else:
+            console.print("[red]Invalid option[/red]")
+            time.sleep(1)
 
 
 if __name__ == "__main__":
