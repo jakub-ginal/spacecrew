@@ -44,14 +44,22 @@ class Config:
     def __init__(self):
         self.config_file = CONFIG_DIR / "config.toml"
         self._config = self.DEFAULTS.copy()
+        self._toml_load = self._get_toml_loader()
         self.load()
+    
+    def _get_toml_loader(self):
+        try:
+            import tomllib
+            return tomllib.load
+        except ImportError:
+            import tomli
+            return tomli.load
     
     def load(self):
         if self.config_file.exists():
             try:
-                import tomllib
                 with open(self.config_file, "rb") as f:
-                    loaded = tomllib.load(f)
+                    loaded = self._toml_load(f)
                 self._config.update(loaded)
             except Exception:
                 pass
@@ -154,7 +162,7 @@ USER_AGENT = (
 
 
 def clear_screen():
-    os.system("clear")
+    os.system("cls" if os.name == "nt" else "clear")
 
 
 def to_thumb_url(original_url: str, width: int) -> str:
@@ -465,33 +473,6 @@ def show_apod_view(target_date: str | None = None):
             return
 
 
-def format_iss_position(data: dict) -> str:
-    """Format ISS position for display."""
-    if not data:
-        return "[red]Unable to fetch ISS position[/red]"
-    
-    pos = data.get("iss_position", {})
-    lat = pos.get("latitude", "N/A")
-    lon = pos.get("longitude", "N/A")
-    timestamp = data.get("timestamp", 0)
-    
-    dt = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
-    time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-    
-    # Google Maps link
-    maps_url = f"https://www.google.com/maps/@{lat},{lon},3z"
-    
-    text = Text()
-    text.append("ISS Current Position\n", style="bold cyan")
-    text.append(f"Latitude:  {lat}\n", style="white")
-    text.append(f"Longitude: {lon}\n", style="white")
-    text.append(f"Time:      {time_str}\n", style="white")
-    text.append(f"\nView on map: ", style="dim")
-    text.append(f"[link={maps_url}]Google Maps[/link]", style="blue")
-    
-    return text
-
-
 def show_iss_position():
     """Show current ISS position."""
     clear_screen()
@@ -554,7 +535,7 @@ def fetch_launches(limit: int = 15) -> list[dict]:
 
 
 def fetch_iss_position() -> dict | None:
-    """Fetch current ISS position from multiple sources for best accuracy."""
+    """Fetch current ISS position - prefer wheretheiss.at (real-time TLE) over open-notify."""
     global _iss_cache
     
     if _iss_cache is not None:
@@ -565,60 +546,52 @@ def fetch_iss_position() -> dict | None:
         _iss_cache = cached
         return cached
     
-    # Try multiple sources, prefer the most recent
-    sources = [
-        ("open_notify", "http://api.open-notify.org/iss-now.json"),
-        ("wheretheiss_at", "https://api.wheretheiss.at/v1/satellites/25544"),
-    ]
+    # Try wheretheiss.at first (more accurate - real-time TLE calculation)
+    try:
+        res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=20, max_retries=2)
+        if res and res.status_code == 200:
+            data = res.json()
+            timestamp = data.get("timestamp", 0)
+            if timestamp > 0:
+                _iss_cache = {
+                    "message": "success",
+                    "iss_position": {
+                        "latitude": str(data.get("latitude", "")),
+                        "longitude": str(data.get("longitude", "")),
+                    },
+                    "timestamp": timestamp,
+                    "source": "wheretheiss_at",
+                    "altitude": data.get("altitude"),
+                    "velocity": data.get("velocity"),
+                    "visibility": data.get("visibility"),
+                }
+                cache.set("iss:position", _iss_cache)
+                return _iss_cache
+    except Exception:
+        pass
     
-    best_data = None
-    best_timestamp = 0
+    # Fallback to open-notify
+    try:
+        res = fetch_with_retry("http://api.open-notify.org/iss-now.json", timeout=5)
+        if res and res.status_code == 200:
+            data = res.json()
+            if data.get("message") == "success":
+                timestamp = data.get("timestamp", 0)
+                _iss_cache = {
+                    "message": "success",
+                    "iss_position": {
+                        "latitude": data["iss_position"]["latitude"],
+                        "longitude": data["iss_position"]["longitude"],
+                    },
+                    "timestamp": timestamp,
+                    "source": "open_notify",
+                }
+                cache.set("iss:position", _iss_cache)
+                return _iss_cache
+    except Exception:
+        pass
     
-    for source_name, url in sources:
-        try:
-            res = fetch_with_retry(url, timeout=5)
-            if res and res.status_code == 200:
-                data = res.json()
-                
-                if source_name == "open_notify":
-                    if data.get("message") == "success":
-                        timestamp = data.get("timestamp", 0)
-                        if timestamp > best_timestamp:
-                            best_data = {
-                                "source": "open_notify",
-                                "latitude": data["iss_position"]["latitude"],
-                                "longitude": data["iss_position"]["longitude"],
-                                "timestamp": timestamp,
-                            }
-                            best_timestamp = timestamp
-                elif source_name == "wheretheiss_at":
-                    # wheretheiss.at returns: latitude, longitude, timestamp, velocity, etc.
-                    timestamp = data.get("timestamp", 0)
-                    if timestamp > best_timestamp:
-                        best_data = {
-                            "source": "wheretheiss_at",
-                            "latitude": str(data.get("latitude", "")),
-                            "longitude": str(data.get("longitude", "")),
-                            "timestamp": timestamp,
-                        }
-                        best_timestamp = timestamp
-        except Exception:
-            continue
-    
-    if best_data:
-        # Convert to Open Notify format for compatibility
-        _iss_cache = {
-            "message": "success",
-            "iss_position": {
-                "latitude": best_data["latitude"],
-                "longitude": best_data["longitude"],
-            },
-            "timestamp": best_data["timestamp"],
-            "source": best_data["source"],
-        }
-        cache.set("iss:position", _iss_cache)
-        return _iss_cache
-    
+    console.print("[red]All ISS position sources failed[/red]")
     return None
 
 
@@ -690,7 +663,7 @@ def format_iss_position(data: dict) -> str:
     if data.get("source") == "wheretheiss_at":
         # We need to fetch fresh data for altitude/velocity
         try:
-            res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=3)
+            res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=15, max_retries=1)
             if res and res.status_code == 200:
                 w_data = res.json()
                 altitude = w_data.get("altitude")
