@@ -1,11 +1,16 @@
+import argparse
 import importlib.metadata
+import json
 import os
 import re
+import sqlite3
+import sys
 import time
 import webbrowser
 from collections import defaultdict
 from datetime import datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import chafa
@@ -21,9 +26,117 @@ from rich.tree import Tree
 console = Console()
 
 WIKIMEDIA_THUMB_WIDTH: int = 250
+CONFIG_DIR = Path.home() / ".config" / "spacecrew"
+CACHE_DB = CONFIG_DIR / "cache.db"
 
-# In-memory session cache for APOD (no disk usage)
+
+class Config:
+    """Configuration manager using TOML file."""
+    
+    DEFAULTS = {
+        "nasa_api_key": "",
+        "cache_ttl_days": 30,
+        "theme": "default",
+        "show_iss_position": True,
+        "default_mode": "menu",
+    }
+    
+    def __init__(self):
+        self.config_file = CONFIG_DIR / "config.toml"
+        self._config = self.DEFAULTS.copy()
+        self.load()
+    
+    def load(self):
+        if self.config_file.exists():
+            try:
+                import tomllib
+                with open(self.config_file, "rb") as f:
+                    loaded = tomllib.load(f)
+                self._config.update(loaded)
+            except Exception:
+                pass
+    
+    def save(self):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            import tomli_w
+            with open(self.config_file, "wb") as f:
+                tomli_w.dump(self._config, f)
+        except Exception:
+            pass
+    
+    def get(self, key: str, default=None):
+        # Check env var first (NASA_API_KEY)
+        if key == "nasa_api_key":
+            return os.getenv("NASA_API_KEY", self._config.get(key, default))
+        return self._config.get(key, default)
+    
+    def set(self, key: str, value):
+        self._config[key] = value
+        self.save()
+
+
+class Cache:
+    """Persistent SQLite cache for API responses."""
+    
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+    
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS cache (
+                    key TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_timestamp ON cache(timestamp)
+            """)
+            conn.commit()
+    
+    def get(self, key: str, ttl_days: int = 30) -> dict | None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT data, timestamp FROM cache WHERE key = ?", (key,)
+            ).fetchone()
+            if row:
+                age_days = (time.time() - row["timestamp"]) / 86400
+                if age_days <= ttl_days:
+                    return json.loads(row["data"])
+                else:
+                    # Expired, delete
+                    conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+                    conn.commit()
+        return None
+    
+    def set(self, key: str, data: dict):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO cache (key, data, timestamp) VALUES (?, ?, ?)",
+                (key, json.dumps(data), int(time.time()))
+            )
+            conn.commit()
+    
+    def clear_expired(self, ttl_days: int = 30):
+        cutoff = int(time.time() - ttl_days * 86400)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM cache WHERE timestamp < ?", (cutoff,))
+            conn.commit()
+
+
+# Global instances
+config = Config()
+cache = Cache(CACHE_DB)
+
+# In-memory session cache (fallback for current session)
 _apod_cache: dict[str, dict] = {}
+_launches_cache: list[dict] | None = None
+_iss_cache: dict | None = None
 
 
 def _spacecrew_version() -> str:
@@ -242,15 +355,24 @@ def handle_mission_view(craft, members):
 
 
 def get_nasa_api_key() -> str:
-    return os.getenv("NASA_API_KEY", "DEMO_KEY")
+    return config.get("nasa_api_key", "DEMO_KEY")
 
 
 def fetch_apod_date(target_date: str | None):
     """Fetch APOD for specific date (YYYY-MM-DD) or today if None."""
     cache_key = target_date or "today"
-    if cache_key in _apod_cache:
-        return _apod_cache[cache_key]
-
+    mem_key = f"apod:{cache_key}"
+    
+    # Check memory cache first
+    if mem_key in _apod_cache:
+        return _apod_cache[mem_key]
+    
+    # Check persistent cache
+    cached = cache.get(mem_key, config.get("cache_ttl_days", 30))
+    if cached:
+        _apod_cache[mem_key] = cached
+        return cached
+    
     base_url = "https://api.nasa.gov/planetary/apod"
     params = {"api_key": get_nasa_api_key()}
     if target_date:
@@ -261,7 +383,8 @@ def fetch_apod_date(target_date: str | None):
         res = fetch_with_retry(url, timeout=10)
         if res and res.status_code == 200:
             data = res.json()
-            _apod_cache[cache_key] = data
+            _apod_cache[mem_key] = data
+            cache.set(mem_key, data)
             return data
     except Exception:
         pass
@@ -342,16 +465,73 @@ def show_apod_view(target_date: str | None = None):
             return
 
 
+def format_iss_position(data: dict) -> str:
+    """Format ISS position for display."""
+    if not data:
+        return "[red]Unable to fetch ISS position[/red]"
+    
+    pos = data.get("iss_position", {})
+    lat = pos.get("latitude", "N/A")
+    lon = pos.get("longitude", "N/A")
+    timestamp = data.get("timestamp", 0)
+    
+    dt = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
+    time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+    # Google Maps link
+    maps_url = f"https://www.google.com/maps/@{lat},{lon},3z"
+    
+    text = Text()
+    text.append("ISS Current Position\n", style="bold cyan")
+    text.append(f"Latitude:  {lat}\n", style="white")
+    text.append(f"Longitude: {lon}\n", style="white")
+    text.append(f"Time:      {time_str}\n", style="white")
+    text.append(f"\nView on map: ", style="dim")
+    text.append(f"[link={maps_url}]Google Maps[/link]", style="blue")
+    
+    return text
+
+
+def show_iss_position():
+    """Show current ISS position."""
+    clear_screen()
+    console.print("[bold cyan]Fetching ISS position...[/bold cyan]\n")
+    
+    data = fetch_iss_position()
+    if not data:
+        console.print("[bold red]Error: Could not fetch ISS position[/bold red]")
+        input("\nPress Enter to return to menu...")
+        return
+    
+    from rich.panel import Panel
+    console.print(Panel(format_iss_position(data), title="ISS Tracker", border_style="cyan"))
+    
+    console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]r[/cyan] - Refresh  [cyan]Enter[/cyan] - Back")
+    choice = input("> ").strip().lower()
+    if choice == "r":
+        global _iss_cache
+        _iss_cache = None
+        show_iss_position()
+
+
 # Launches feature
 LAUNCHES_API_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
-_launches_cache: list[dict] | None = None
 
 
 def fetch_launches(limit: int = 15) -> list[dict]:
     """Fetch upcoming launches from The Space Devs API."""
     global _launches_cache
+    cache_key = f"launches:{limit}"
+    
+    # Check memory cache first
     if _launches_cache is not None:
         return _launches_cache
+    
+    # Check persistent cache
+    cached = cache.get(cache_key, config.get("cache_ttl_days", 30))
+    if cached:
+        _launches_cache = cached
+        return cached
 
     params = {
         "limit": limit,
@@ -366,10 +546,180 @@ def fetch_launches(limit: int = 15) -> list[dict]:
             data = res.json()
             launches = data.get("results", [])
             _launches_cache = launches
+            cache.set(cache_key, launches)
             return launches
     except Exception:
         pass
     return []
+
+
+def fetch_iss_position() -> dict | None:
+    """Fetch current ISS position from multiple sources for best accuracy."""
+    global _iss_cache
+    
+    if _iss_cache is not None:
+        return _iss_cache
+    
+    cached = cache.get("iss:position", 1/1440)  # 1 minute TTL
+    if cached:
+        _iss_cache = cached
+        return cached
+    
+    # Try multiple sources, prefer the most recent
+    sources = [
+        ("open_notify", "http://api.open-notify.org/iss-now.json"),
+        ("wheretheiss_at", "https://api.wheretheiss.at/v1/satellites/25544"),
+    ]
+    
+    best_data = None
+    best_timestamp = 0
+    
+    for source_name, url in sources:
+        try:
+            res = fetch_with_retry(url, timeout=5)
+            if res and res.status_code == 200:
+                data = res.json()
+                
+                if source_name == "open_notify":
+                    if data.get("message") == "success":
+                        timestamp = data.get("timestamp", 0)
+                        if timestamp > best_timestamp:
+                            best_data = {
+                                "source": "open_notify",
+                                "latitude": data["iss_position"]["latitude"],
+                                "longitude": data["iss_position"]["longitude"],
+                                "timestamp": timestamp,
+                            }
+                            best_timestamp = timestamp
+                elif source_name == "wheretheiss_at":
+                    # wheretheiss.at returns: latitude, longitude, timestamp, velocity, etc.
+                    timestamp = data.get("timestamp", 0)
+                    if timestamp > best_timestamp:
+                        best_data = {
+                            "source": "wheretheiss_at",
+                            "latitude": str(data.get("latitude", "")),
+                            "longitude": str(data.get("longitude", "")),
+                            "timestamp": timestamp,
+                        }
+                        best_timestamp = timestamp
+        except Exception:
+            continue
+    
+    if best_data:
+        # Convert to Open Notify format for compatibility
+        _iss_cache = {
+            "message": "success",
+            "iss_position": {
+                "latitude": best_data["latitude"],
+                "longitude": best_data["longitude"],
+            },
+            "timestamp": best_data["timestamp"],
+            "source": best_data["source"],
+        }
+        cache.set("iss:position", _iss_cache)
+        return _iss_cache
+    
+    return None
+
+
+def get_location_name(lat: float, lon: float) -> str:
+    """Get country/region name from coordinates using reverse geocoding."""
+    try:
+        # Use a simple free API - OpenStreetMap Nominatim
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=3&addressdetails=1"
+        headers = {"User-Agent": USER_AGENT}
+        res = requests.get(url, headers=headers, timeout=5)
+        if res and res.status_code == 200:
+            data = res.json()
+            address = data.get("address", {})
+            # Try to get country
+            country = address.get("country")
+            if country:
+                return country
+            # Check for ocean/sea
+            for key in ["sea", "ocean", "water_body", "strait", "bay", "gulf"]:
+                if key in address:
+                    return f"Over {address[key]}"
+            # Check for other geographic features
+            for key in ["island", "archipelago", "continent"]:
+                if key in address:
+                    return address[key]
+    except Exception:
+        pass
+    
+    # Fallback: rough ocean detection
+    if lat < -60:
+        return "Over Southern Ocean / Antarctica"
+    elif lat > 60:
+        return "Over Arctic Ocean"
+    elif -60 <= lat <= 60:
+        # Rough ocean detection by longitude
+        if -180 <= lon <= -70 or 100 <= lon <= 180:
+            return "Over Pacific Ocean"
+        elif -70 < lon < 20:
+            return "Over Atlantic Ocean"
+        elif 20 <= lon < 100:
+            return "Over Indian Ocean"
+    return "Unknown"
+
+
+def format_iss_position(data: dict) -> str:
+    """Format ISS position for display."""
+    if not data:
+        return "[red]Unable to fetch ISS position[/red]"
+    
+    pos = data.get("iss_position", {})
+    lat = pos.get("latitude", "N/A")
+    lon = pos.get("longitude", "N/A")
+    timestamp = data.get("timestamp", 0)
+    
+    dt = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
+    time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+    # Try to get location name
+    location_name = "Unknown"
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+        location_name = get_location_name(lat_f, lon_f)
+    except (ValueError, TypeError):
+        pass
+    
+    # Get extra data from WhereTheISS.at if available
+    extra_info = ""
+    if data.get("source") == "wheretheiss_at":
+        # We need to fetch fresh data for altitude/velocity
+        try:
+            res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=3)
+            if res and res.status_code == 200:
+                w_data = res.json()
+                altitude = w_data.get("altitude")
+                velocity = w_data.get("velocity")
+                visibility = w_data.get("visibility")
+                if altitude:
+                    extra_info += f"Altitude:  {altitude:.1f} km\n"
+                if velocity:
+                    extra_info += f"Velocity:  {velocity:.0f} km/h\n"
+                if visibility:
+                    extra_info += f"Visibility: {visibility}\n"
+        except Exception:
+            pass
+    
+    # Google Maps link with red pin marker
+    maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+    
+    text = Text()
+    text.append("ISS Current Position\n", style="bold cyan")
+    text.append(f"Latitude:  {lat}\n", style="white")
+    text.append(f"Longitude: {lon}\n", style="white")
+    text.append(f"Location:  {location_name}\n", style="white")
+    if extra_info:
+        text.append(f"{extra_info}", style="white")
+    text.append(f"Time:      {time_str}\n", style="white")
+    text.append(f"\nView on map: ", style="dim")
+    text.append(f"[link={maps_url}]Google Maps (with marker)[/link]", style="blue")
+    
+    return text
 
 
 def format_launch_datetime(iso_str: str) -> str:
@@ -588,7 +938,7 @@ def show_launch_detail(launch: dict):
 
 
 def show_main_menu():
-    """Show main menu with 3 options."""
+    """Show main menu with 4 options."""
     from rich.align import Align
     from rich.panel import Panel
     from rich.text import Text
@@ -606,6 +956,9 @@ def show_main_menu():
     menu_text.append("Upcoming Launches", style="cyan")
     menu_text.append("\n")
     menu_text.append("  4 ", style="bold white")
+    menu_text.append("ISS Position", style="cyan")
+    menu_text.append("\n")
+    menu_text.append("  5 ", style="bold white")
     menu_text.append("Exit", style="cyan")
 
     panel = Panel(
@@ -648,14 +1001,55 @@ def handle_people_in_space():
     return "ok"
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog="spacecrew",
+        description="Spacecrew - Track people in space, NASA APOD, launches, and ISS position",
+    )
+    parser.add_argument(
+        "-v", "--version", action="version", version=f"%(prog)s {_spacecrew_version()}"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["people", "apod", "launches", "iss"],
+        help="Start directly in a specific mode",
+    )
+    parser.add_argument(
+        "--no-cache", action="store_true", help="Disable persistent cache for this run"
+    )
+    parser.add_argument(
+        "--clear-cache", action="store_true", help="Clear expired cache entries and exit"
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    
+    if args.clear_cache:
+        cache.clear_expired(config.get("cache_ttl_days", 30))
+        console.print("[green]Cache cleared[/green]")
+        return
+    
+    # Direct mode handling
+    if args.mode:
+        if args.mode == "people":
+            handle_people_in_space()
+        elif args.mode == "apod":
+            show_apod_view()
+        elif args.mode == "launches":
+            show_launches_list()
+        elif args.mode == "iss":
+            show_iss_position()
+        return
+    
     while True:
         clear_screen()
         show_main_menu()
         console.print()
-        choice = console.input("[bold cyan]Select option [1-4]: [/bold cyan]").strip().lower()
+        choice = console.input("[bold cyan]Select option [1-5]: [/bold cyan]").strip().lower()
 
-        if choice in ("4", "quit", "exit", "q"):
+        if choice in ("5", "quit", "exit", "q"):
             break
         elif choice == "1":
             result = handle_people_in_space()
@@ -665,6 +1059,8 @@ def main():
             show_apod_view()
         elif choice == "3":
             show_launches_list()
+        elif choice == "4":
+            show_iss_position()
         else:
             console.print("[red]Invalid option[/red]")
             time.sleep(1)
