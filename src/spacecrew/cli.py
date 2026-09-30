@@ -8,7 +8,7 @@ import sys
 import time
 import webbrowser
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -612,7 +612,203 @@ def fetch_iss_position() -> dict | None:
     return None
 
 
-def get_location_name(lat: float, lon: float) -> str:
+# Space Weather feature
+DONKI_API_BASE = "https://ccmc.gsfc.nasa.gov/DONKI/WS/get"
+NOAA_SWPC_BASE = "https://services.swpc.noaa.gov"
+
+
+def fetch_space_weather(limit: int = 5) -> dict:
+    """Fetch space weather data from NOAA/DONKI APIs."""
+    global _space_weather_cache
+    cache_key = f"space_weather:{limit}"
+    
+    if _space_weather_cache is not None:
+        return _space_weather_cache
+    
+    cached = cache.get(cache_key, config.get("cache_ttl_days", 1))
+    if cached:
+        _space_weather_cache = cached
+        return cached
+    
+    if _global_offline:
+        return {}
+    
+    result = {"flares": [], "cmes": [], "kp_index": [], "forecast": ""}
+    
+    # Fetch recent solar flares (last 10 days)
+    try:
+        end_date = datetime.now(timezone.utc).date()
+        start_date = end_date - timedelta(days=10)
+        url = f"{DONKI_API_BASE}/FLR?startDate={start_date}&endDate={end_date}&api_key={get_nasa_api_key()}"
+        res = fetch_with_retry(url, timeout=10)
+        if res and res.status_code == 200:
+            flares = res.json()
+            # Sort by peak time, most recent first
+            flares.sort(key=lambda x: x.get("peakTime", ""), reverse=True)
+            result["flares"] = flares[:limit]
+    except Exception:
+        pass
+    
+    # Fetch recent CMEs (last 10 days)
+    try:
+        end_date = datetime.now(timezone.utc).date()
+        start_date = end_date - timedelta(days=10)
+        url = f"{DONKI_API_BASE}/CME?startDate={start_date}&endDate={end_date}&api_key={get_nasa_api_key()}"
+        res = fetch_with_retry(url, timeout=10)
+        if res and res.status_code == 200:
+            cmes = res.json()
+            cmes.sort(key=lambda x: x.get("startTime", ""), reverse=True)
+            result["cmes"] = cmes[:limit]
+    except Exception:
+        pass
+    
+    # Fetch planetary Kp index (last 24 hours)
+    try:
+        url = f"{NOAA_SWPC_BASE}/json/planetary_k_index_1m.json"
+        res = fetch_with_retry(url, timeout=10)
+        if res and res.status_code == 200:
+            kp_data = res.json()
+            # Get last 24 entries (3-hour intervals)
+            result["kp_index"] = kp_data[-24:] if len(kp_data) > 24 else kp_data
+    except Exception:
+        pass
+    
+    # Fetch 3-day forecast text
+    try:
+        url = f"{NOAA_SWPC_BASE}/text/3-day-forecast.txt"
+        res = fetch_with_retry(url, timeout=10)
+        if res and res.status_code == 200:
+            result["forecast"] = res.text
+    except Exception:
+        pass
+    
+    _space_weather_cache = result
+    cache.set(cache_key, result)
+    return result
+
+
+_space_weather_cache: dict | None = None
+
+
+def format_flare_class(class_type: str) -> str:
+    """Format flare class with color."""
+    if not class_type:
+        return "[dim]Unknown[/dim]"
+    if class_type.startswith("X"):
+        return f"[bold red]{class_type}[/bold red]"
+    elif class_type.startswith("M"):
+        return f"[bold yellow]{class_type}[/bold yellow]"
+    elif class_type.startswith("C"):
+        return f"[bold cyan]{class_type}[/bold cyan]"
+    elif class_type.startswith("B"):
+        return f"[bold green]{class_type}[/bold green]"
+    return class_type
+
+
+def format_kp_index(kp: float) -> str:
+    """Format Kp index with color based on storm level."""
+    if kp >= 5:
+        return f"[bold red]{kp:.1f}[/bold red]"
+    elif kp >= 4:
+        return f"[bold yellow]{kp:.1f}[/bold yellow]"
+    elif kp >= 3:
+        return f"[bold cyan]{kp:.1f}[/bold cyan]"
+    return f"[green]{kp:.1f}[/green]"
+
+
+def create_space_weather_table(data: dict) -> Table:
+    """Create table for space weather overview."""
+    table = Table(title="Space Weather Overview", show_header=True, header_style="bold cyan", expand=True)
+    table.add_column("Category", style="cyan", width=18, no_wrap=True)
+    table.add_column("Details", style="white")
+    
+    # Solar Flares
+    flares = data.get("flares", [])
+    if flares:
+        flare_text = ""
+        for i, flare in enumerate(flares[:3]):
+            cls = format_flare_class(flare.get("classType", ""))
+            peak = flare.get("peakTime", "").replace("T", " ").replace("Z", " UTC")
+            region = flare.get("activeRegionNum", "N/A")
+            flare_text += f"{cls}  {peak}  AR{region}\n"
+        table.add_row("Recent Flares", flare_text.strip())
+    else:
+        table.add_row("Recent Flares", "[dim]No recent flares[/dim]")
+    
+    # CMEs
+    cmes = data.get("cmes", [])
+    if cmes:
+        cme_text = ""
+        for i, cme in enumerate(cmes[:3]):
+            start = cme.get("startTime", "").replace("T", " ").replace("Z", " UTC")
+            speed = "N/A"
+            if cme.get("cmeAnalyses"):
+                speed = f"{cme['cmeAnalyses'][0].get('speed', 0):.0f} km/s"
+            cme_text += f"{start}  {speed}\n"
+        table.add_row("Recent CMEs", cme_text.strip())
+    else:
+        table.add_row("Recent CMEs", "[dim]No recent CMEs[/dim]")
+    
+    # Kp Index (current and max last 24h)
+    kp_data = data.get("kp_index", [])
+    if kp_data:
+        current_kp = kp_data[-1].get("kp_index", 0) if kp_data else 0
+        max_kp = max((d.get("kp_index", 0) for d in kp_data), default=0)
+        table.add_row("Current Kp", format_kp_index(current_kp))
+        table.add_row("Max Kp (24h)", format_kp_index(max_kp))
+        # Storm level
+        if max_kp >= 5:
+            storm = "[bold red]G1-G5 Storm[/bold red]"
+        elif max_kp >= 4:
+            storm = "[bold yellow]G1 Minor Storm[/bold yellow]"
+        else:
+            storm = "[green]Quiet[/green]"
+        table.add_row("Storm Level", storm)
+    else:
+        table.add_row("Kp Index", "[dim]No data[/dim]")
+    
+    return table
+
+
+def show_space_weather():
+    """Show space weather dashboard."""
+    clear_screen()
+    console.print("[bold cyan]Fetching space weather data...[/bold cyan]\n")
+    
+    data = fetch_space_weather()
+    if not data:
+        console.print("[bold red]Error: Could not fetch space weather data[/bold red]")
+        input("\nPress Enter to return to menu...")
+        return
+    
+    while True:
+        clear_screen()
+        console.print(create_space_weather_table(data))
+        
+        # Show forecast summary
+        forecast = data.get("forecast", "")
+        if forecast:
+            # Extract key lines
+            lines = forecast.split("\n")
+            key_lines = [l for l in lines if any(k in l.lower() for k in ["kp", "storm", "flare", "cme", "geomagnetic", "radiation", "g1", "g2", "g3", "g4", "g5"])]
+            if key_lines:
+                forecast_text = Text()
+                forecast_text.append("3-Day Forecast Highlights:\n", style="bold cyan")
+                for line in key_lines[:6]:
+                    forecast_text.append(f"  {line.strip()}\n", style="white")
+                console.print(Panel(forecast_text, title="NOAA SWPC Forecast", border_style="cyan"))
+        
+        console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]r[/cyan] - Refresh  [cyan]Enter[/cyan] - Back")
+        choice = input("> ").strip().lower()
+        
+        if not choice:
+            return
+        if choice == "r":
+            global _space_weather_cache
+            _space_weather_cache = None
+            console.print("[dim]Refreshing...[/dim]")
+            time.sleep(1)
+            return show_space_weather()
     """Get country/region name from coordinates using reverse geocoding."""
     try:
         # Use a simple free API - OpenStreetMap Nominatim
@@ -723,6 +919,30 @@ def format_launch_datetime(iso_str: str) -> str:
         return iso_str
 
 
+def get_launch_countdown(window_start: str) -> str:
+    """Calculate time until launch window start."""
+    if not window_start or window_start == "TBD":
+        return ""
+    try:
+        dt = datetime.fromisoformat(window_start.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if dt <= now:
+            return "[bold red]LAUNCHED[/bold red]"
+        diff = dt - now
+        days = diff.days
+        hours, rem = divmod(diff.seconds, 3600)
+        minutes, _ = divmod(rem, 60)
+        if days > 0:
+            return f"[bold cyan]T-{days}d {hours:02d}h {minutes:02d}m[/bold cyan]"
+        elif hours > 0:
+            color = "bold yellow" if hours < 1 else "bold cyan"
+            return f"[{color}]T-{hours}h {minutes:02d}m[/{color}]"
+        else:
+            return f"[bold red]T-{minutes}m[/bold red]"
+    except Exception:
+        return ""
+
+
 def format_launch_status(status: dict) -> str:
     """Format launch status with color."""
     if not status:
@@ -782,6 +1002,7 @@ def create_launches_panel_list(launches: list[dict]) -> list:
         window_start = format_launch_datetime(launch.get("window_start", ""))
         status = launch.get("status", {}).get("name", "Unknown")
         status_id = launch.get("status", {}).get("id", 0)
+        countdown = get_launch_countdown(launch.get("window_start", ""))
 
         # Color based on status
         if status_id == 1:
@@ -798,6 +1019,8 @@ def create_launches_panel_list(launches: list[dict]) -> list:
         text.append(f"{mission}\n", style="bold white")
         text.append(f"    {rocket} / {provider}\n", style="green")
         text.append(f"    {window_start}  ", style="white")
+        if countdown:
+            text.append(f" {countdown}  ", style="")
         text.append(f"[{status}]", style=status_style)
 
         panels.append(Panel(text, border_style="dim", padding=(0, 1)))
@@ -928,7 +1151,7 @@ def show_launch_detail(launch: dict):
 
 
 def show_main_menu():
-    """Show main menu with 4 options."""
+    """Show main menu with 5 options."""
     from rich.align import Align
     from rich.panel import Panel
     from rich.text import Text
@@ -949,6 +1172,9 @@ def show_main_menu():
     menu_text.append("ISS Position", style="cyan")
     menu_text.append("\n")
     menu_text.append("  5 ", style="bold white")
+    menu_text.append("Space Weather", style="cyan")
+    menu_text.append("\n")
+    menu_text.append("  6 ", style="bold white")
     menu_text.append("Exit", style="cyan")
 
     panel = Panel(
@@ -997,14 +1223,14 @@ _global_offline = False
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="spacecrew",
-        description="Spacecrew - Track people in space, NASA APOD, launches, and ISS position",
+        description="Spacecrew - Track people in space, NASA APOD, launches, ISS position, and space weather",
     )
     parser.add_argument(
         "-v", "--version", action="version", version=f"%(prog)s {_spacecrew_version()}"
     )
     parser.add_argument(
         "--mode",
-        choices=["people", "apod", "launches", "iss"],
+        choices=["people", "apod", "launches", "iss", "weather"],
         help="Start directly in a specific mode",
     )
     parser.add_argument(
@@ -1043,15 +1269,17 @@ def main():
             show_launches_list()
         elif args.mode == "iss":
             show_iss_position()
+        elif args.mode == "weather":
+            show_space_weather()
         return
     
     while True:
         clear_screen()
         show_main_menu()
         console.print()
-        choice = console.input("[bold cyan]Select option [1-5]: [/bold cyan]").strip().lower()
+        choice = console.input("[bold cyan]Select option [1-6]: [/bold cyan]").strip().lower()
 
-        if choice in ("5", "quit", "exit", "q"):
+        if choice in ("6", "quit", "exit", "q"):
             break
         elif choice == "1":
             result = handle_people_in_space()
@@ -1063,6 +1291,8 @@ def main():
             show_launches_list()
         elif choice == "4":
             show_iss_position()
+        elif choice == "5":
+            show_space_weather()
         else:
             console.print("[red]Invalid option[/red]")
             time.sleep(1)
