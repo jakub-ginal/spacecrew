@@ -197,11 +197,19 @@ def fetch_with_retry(url, headers=None, timeout=5, max_retries=3, backoff_factor
 
 
 def fetch_space_data():
+    if _global_offline:
+        cached = cache.get("people:space", config.get("cache_ttl_days", 30))
+        if cached and "people" in cached:
+            return cached["people"]
+        return None
+    
     url = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
     try:
         res = fetch_with_retry(url, timeout=5)
         if res and res.status_code == 200:
-            return res.json()["people"]
+            data = res.json()
+            cache.set("people:space", data)
+            return data["people"]
     except Exception:
         pass
     return None
@@ -381,6 +389,9 @@ def fetch_apod_date(target_date: str | None):
         _apod_cache[mem_key] = cached
         return cached
     
+    if _global_offline:
+        return None
+    
     base_url = "https://api.nasa.gov/planetary/apod"
     params = {"api_key": get_nasa_api_key()}
     if target_date:
@@ -513,6 +524,9 @@ def fetch_launches(limit: int = 15) -> list[dict]:
     if cached:
         _launches_cache = cached
         return cached
+    
+    if _global_offline:
+        return []
 
     params = {
         "limit": limit,
@@ -545,6 +559,9 @@ def fetch_iss_position() -> dict | None:
     if cached:
         _iss_cache = cached
         return cached
+    
+    if _global_offline:
+        return None
     
     # Try wheretheiss.at first (more accurate - real-time TLE calculation)
     try:
@@ -974,6 +991,9 @@ def handle_people_in_space():
     return "ok"
 
 
+_global_offline = False
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="spacecrew",
@@ -993,11 +1013,20 @@ def parse_args():
     parser.add_argument(
         "--clear-cache", action="store_true", help="Clear expired cache entries and exit"
     )
+    parser.add_argument(
+        "--offline", action="store_true", help="Offline mode: use only cached data, no network requests"
+    )
     return parser.parse_args()
 
 
 def main():
+    global _global_offline
     args = parse_args()
+    
+    if args.offline:
+        _global_offline = True
+        console.print("[yellow]Offline mode: using cached data only[/yellow]")
+        time.sleep(0.5)
     
     if args.clear_cache:
         cache.clear_expired(config.get("cache_ttl_days", 30))
