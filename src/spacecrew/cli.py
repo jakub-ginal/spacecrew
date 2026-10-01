@@ -39,6 +39,9 @@ class Config:
         "theme": "default",
         "show_iss_position": True,
         "default_mode": "menu",
+        "observer_lat": None,
+        "observer_lon": None,
+        "observer_alt": 0,
     }
     
     def __init__(self):
@@ -555,7 +558,9 @@ def fetch_iss_position() -> dict | None:
     if _iss_cache is not None:
         return _iss_cache
     
-    cached = cache.get("iss:position", 1/1440)  # 1 minute TTL
+    # In offline mode, ignore TTL and return any cached data
+    ttl = 30 if _global_offline else 1/1440
+    cached = cache.get("iss:position", ttl)
     if cached:
         _iss_cache = cached
         return cached
@@ -610,6 +615,106 @@ def fetch_iss_position() -> dict | None:
     
     console.print("[red]All ISS position sources failed[/red]")
     return None
+
+
+def get_location_name(lat: float, lon: float) -> str:
+    """Get country/region name from coordinates using reverse geocoding."""
+    try:
+        # Use a simple free API - OpenStreetMap Nominatim
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=3&addressdetails=1"
+        headers = {"User-Agent": USER_AGENT}
+        res = requests.get(url, headers=headers, timeout=5)
+        if res and res.status_code == 200:
+            data = res.json()
+            address = data.get("address", {})
+            # Try to get country
+            country = address.get("country")
+            if country:
+                return country
+            # Check for ocean/sea
+            for key in ["sea", "ocean", "water_body", "strait", "bay", "gulf"]:
+                if key in address:
+                    return f"Over {address[key]}"
+            # Check for other geographic features
+            for key in ["island", "archipelago", "continent"]:
+                if key in address:
+                    return address[key]
+    except Exception:
+        pass
+    
+    # Fallback: rough ocean detection
+    if lat < -60:
+        return "Over Southern Ocean / Antarctica"
+    elif lat > 60:
+        return "Over Arctic Ocean"
+    elif -60 <= lat <= 60:
+        # Rough ocean detection by longitude
+        if -180 <= lon <= -70 or 100 <= lon <= 180:
+            return "Over Pacific Ocean"
+        elif -70 < lon < 20:
+            return "Over Atlantic Ocean"
+        elif 20 <= lon < 100:
+            return "Over Indian Ocean"
+    return "Unknown"
+
+
+def format_iss_position(data: dict) -> str:
+    """Format ISS position for display."""
+    if not data:
+        return "[red]Unable to fetch ISS position[/red]"
+    
+    pos = data.get("iss_position", {})
+    lat = pos.get("latitude", "N/A")
+    lon = pos.get("longitude", "N/A")
+    timestamp = data.get("timestamp", 0)
+    
+    dt = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
+    time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+    # Try to get location name
+    location_name = "Unknown"
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+        location_name = get_location_name(lat_f, lon_f)
+    except (ValueError, TypeError):
+        pass
+    
+    # Get extra data from WhereTheISS.at if available
+    extra_info = ""
+    if data.get("source") == "wheretheiss_at":
+        # We need to fetch fresh data for altitude/velocity
+        try:
+            res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=15, max_retries=1)
+            if res and res.status_code == 200:
+                w_data = res.json()
+                altitude = w_data.get("altitude")
+                velocity = w_data.get("velocity")
+                visibility = w_data.get("visibility")
+                if altitude:
+                    extra_info += f"Altitude:  {altitude:.1f} km\n"
+                if velocity:
+                    extra_info += f"Velocity:  {velocity:.0f} km/h\n"
+                if visibility:
+                    extra_info += f"Visibility: {visibility}\n"
+        except Exception:
+            pass
+    
+    # Google Maps link with red pin marker
+    maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+    
+    text = Text()
+    text.append("ISS Current Position\n", style="bold cyan")
+    text.append(f"Latitude:  {lat}\n", style="white")
+    text.append(f"Longitude: {lon}\n", style="white")
+    text.append(f"Location:  {location_name}\n", style="white")
+    if extra_info:
+        text.append(f"{extra_info}", style="white")
+    text.append(f"Time:      {time_str}\n", style="white")
+    text.append(f"\nView on map: ", style="dim")
+    text.append(f"[link={maps_url}]Google Maps (with marker)[/link]", style="blue")
+    
+    return text
 
 
 # Space Weather feature
@@ -809,47 +914,384 @@ def show_space_weather():
             console.print("[dim]Refreshing...[/dim]")
             time.sleep(1)
             return show_space_weather()
-    """Get country/region name from coordinates using reverse geocoding."""
+
+
+# Satellite Passes feature
+CELESTRAK_TLE_URLS = {
+    "iss": "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=tle",
+    "stations": "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
+    "starlink": "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle",
+    "iridium": "https://celestrak.org/NORAD/elements/gp.php?GROUP=iridium&FORMAT=tle",
+    "gps": "https://celestrak.org/NORAD/elements/gp.php?GROUP=gps-ops&FORMAT=tle",
+    "geo": "https://celestrak.org/NORAD/elements/gp.php?GROUP=geo&FORMAT=tle",
+    "weather": "https://celestrak.org/NORAD/elements/gp.php?GROUP=weather&FORMAT=tle",
+    "science": "https://celestrak.org/NORAD/elements/gp.php?GROUP=science&FORMAT=tle",
+    "amateur": "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle",
+    "military": "https://celestrak.org/NORAD/elements/gp.php?GROUP=military&FORMAT=tle",
+    "radar": "https://celestrak.org/NORAD/elements/gp.php?GROUP=radar&FORMAT=tle",
+    "cubesat": "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle",
+    "other": "https://celestrak.org/NORAD/elements/gp.php?GROUP=other&FORMAT=tle",
+}
+
+
+def fetch_tle_data(group: str = "stations") -> list[dict]:
+    """Fetch TLE data from Celestrak."""
+    global _tle_cache
+    cache_key = f"tle:{group}"
+    
+    if _tle_cache is not None:
+        return _tle_cache
+    
+    cached = cache.get(cache_key, 1)  # 1 day TTL
+    if cached:
+        _tle_cache = cached
+        return cached
+    
+    if _global_offline:
+        return []
+    
+    url = CELESTRAK_TLE_URLS.get(group, CELESTRAK_TLE_URLS["stations"])
     try:
-        # Use a simple free API - OpenStreetMap Nominatim
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=3&addressdetails=1"
-        headers = {"User-Agent": USER_AGENT}
-        res = requests.get(url, headers=headers, timeout=5)
+        res = fetch_with_retry(url, timeout=15)
         if res and res.status_code == 200:
-            data = res.json()
-            address = data.get("address", {})
-            # Try to get country
-            country = address.get("country")
-            if country:
-                return country
-            # Check for ocean/sea
-            for key in ["sea", "ocean", "water_body", "strait", "bay", "gulf"]:
-                if key in address:
-                    return f"Over {address[key]}"
-            # Check for other geographic features
-            for key in ["island", "archipelago", "continent"]:
-                if key in address:
-                    return address[key]
+            lines = res.text.strip().split("\n")
+            satellites = []
+            for i in range(0, len(lines), 3):
+                if i + 2 < len(lines):
+                    name = lines[i].strip()
+                    line1 = lines[i + 1].strip()
+                    line2 = lines[i + 2].strip()
+                    if line1.startswith("1 ") and line2.startswith("2 "):
+                        satellites.append({"name": name, "line1": line1, "line2": line2})
+            _tle_cache = satellites
+            cache.set(cache_key, satellites)
+            return satellites
     except Exception:
         pass
+    return []
+
+
+_tle_cache: list[dict] | None = None
+
+
+def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: float, obs_alt: float, days: int = 3) -> list[dict]:
+    """Calculate visible passes for satellites from observer location."""
+    from sgp4.api import Satrec, jday
+    from math import degrees, radians, sin, cos, sqrt, atan2, asin
     
-    # Fallback: rough ocean detection
-    if lat < -60:
-        return "Over Southern Ocean / Antarctica"
-    elif lat > 60:
-        return "Over Arctic Ocean"
-    elif -60 <= lat <= 60:
-        # Rough ocean detection by longitude
-        if -180 <= lon <= -70 or 100 <= lon <= 180:
-            return "Over Pacific Ocean"
-        elif -70 < lon < 20:
-            return "Over Atlantic Ocean"
-        elif 20 <= lon < 100:
-            return "Over Indian Ocean"
-    return "Unknown"
+    passes = []
+    now = datetime.now(timezone.utc)
+    
+    # Observer position in ECEF
+    obs_lat_rad = radians(obs_lat)
+    obs_lon_rad = radians(obs_lon)
+    R_earth = 6371.0 + obs_alt / 1000.0  # km
+    obs_x = R_earth * cos(obs_lat_rad) * cos(obs_lon_rad)
+    obs_y = R_earth * cos(obs_lat_rad) * sin(obs_lon_rad)
+    obs_z = R_earth * sin(obs_lat_rad)
+    
+    for sat_data in satellites:
+        try:
+            sat = Satrec.twoline2rv(sat_data["line1"], sat_data["line2"])
+            sat_name = sat_data["name"]
+            
+            # Track pass state
+            in_pass = False
+            pass_start = None
+            pass_max_el = 0
+            pass_max_time = None
+            pass_start_az = 0
+            pass_end_az = 0
+            
+            # Check every minute for better accuracy
+            for day_offset in range(days):
+                check_date = now + timedelta(days=day_offset)
+                for minute_offset in range(0, 1440, 1):  # every minute
+                    check_time = check_date.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=minute_offset)
+                    jd, fr = jday(check_time.year, check_time.month, check_time.day, check_time.hour, check_time.minute, check_time.second)
+                    e, r, v = sat.sgp4(jd, fr)
+                    if e != 0:
+                        continue
+                    
+                    # r is in TEME frame (km), convert to ECEF
+                    # TEME to ECEF rotation: rotate around Z by GAST
+                    # Greenwich Apparent Sidereal Time (simplified)
+                    gast = (280.46061837 + 360.98564736629 * (jd - 2451545.0) + fr * 360.98564736629) % 360
+                    gast_rad = radians(gast)
+                    
+                    # Rotate TEME to ECEF (Z-axis rotation)
+                    cos_g = cos(gast_rad)
+                    sin_g = sin(gast_rad)
+                    sat_x = r[0] * cos_g - r[1] * sin_g
+                    sat_y = r[0] * sin_g + r[1] * cos_g
+                    sat_z = r[2]
+                    
+                    # Vector from observer to satellite
+                    dx = sat_x - obs_x
+                    dy = sat_y - obs_y
+                    dz = sat_z - obs_z
+                    
+                    # Range
+                    range_km = sqrt(dx*dx + dy*dy + dz*dz)
+                    
+                    # Convert to topocentric horizon coordinates
+                    # Local East, North, Up basis vectors
+                    east_x = -sin(obs_lon_rad)
+                    east_y = cos(obs_lon_rad)
+                    east_z = 0
+                    
+                    north_x = -sin(obs_lat_rad) * cos(obs_lon_rad)
+                    north_y = -sin(obs_lat_rad) * sin(obs_lon_rad)
+                    north_z = cos(obs_lat_rad)
+                    
+                    up_x = cos(obs_lat_rad) * cos(obs_lon_rad)
+                    up_y = cos(obs_lat_rad) * sin(obs_lon_rad)
+                    up_z = sin(obs_lat_rad)
+                    
+                    # Project satellite vector onto local basis
+                    east = dx * east_x + dy * east_y + dz * east_z
+                    north = dx * north_x + dy * north_y + dz * north_z
+                    up = dx * up_x + dy * up_y + dz * up_z
+                    
+                    # Elevation and azimuth
+                    horizontal_dist = sqrt(east*east + north*north)
+                    elevation = degrees(atan2(up, horizontal_dist))
+                    azimuth = degrees(atan2(east, north)) % 360
+                    
+                    # Sun position (simplified)
+                    sun_el, sun_az = calculate_sun_position(check_time, obs_lat, obs_lon)
+                    
+                    # Check visibility: satellite above 10°, sun below -6° (civil twilight), satellite illuminated
+                    sat_illuminated = is_satellite_illuminated(r, check_time)
+                    ground_dark = sun_el < -6
+                    above_horizon = elevation > 10
+                    
+                    visible = above_horizon and ground_dark and sat_illuminated
+                    
+                    if visible and not in_pass:
+                        # Pass start
+                        in_pass = True
+                        pass_start = check_time
+                        pass_max_el = elevation
+                        pass_max_time = check_time
+                        pass_start_az = azimuth
+                    elif visible and in_pass:
+                        # Continue pass, track max elevation
+                        if elevation > pass_max_el:
+                            pass_max_el = elevation
+                            pass_max_time = check_time
+                    elif not visible and in_pass:
+                        # Pass end
+                        in_pass = False
+                        pass_end_az = azimuth
+                        if pass_start and pass_max_el > 15:  # Only keep passes with decent max elevation
+                            duration = (check_time - pass_start).total_seconds() / 60
+                            if duration > 1:  # At least 1 minute
+                                passes.append({
+                                    "name": sat_name,
+                                    "start": pass_start,
+                                    "end": check_time,
+                                    "max_elevation": pass_max_el,
+                                    "max_time": pass_max_time,
+                                    "start_azimuth": pass_start_az,
+                                    "end_azimuth": pass_end_az,
+                                    "duration": duration,
+                                    "visible": True
+                                })
+        
+        except Exception:
+            continue
+    
+    return passes
 
 
-def format_iss_position(data: dict) -> str:
+def calculate_sun_position(time: datetime, lat: float, lon: float) -> tuple[float, float]:
+    """Calculate sun elevation and azimuth (simplified)."""
+    from math import radians, degrees, sin, cos, tan, atan2, asin
+    
+    # Days since J2000
+    jd = time.timestamp() / 86400 + 2440587.5
+    n = jd - 2451545.0
+    
+    # Mean longitude of sun
+    L = radians(280.460 + 0.9856474 * n)
+    # Mean anomaly
+    g = radians(357.528 + 0.9856003 * n)
+    # Ecliptic longitude
+    lambda_sun = L + radians(1.915) * sin(g) + radians(0.020) * sin(2*g)
+    # Obliquity of ecliptic
+    epsilon = radians(23.439 - 0.0000004 * n)
+    
+    # Right ascension and declination
+    ra = atan2(cos(epsilon) * sin(lambda_sun), cos(lambda_sun))
+    dec = asin(sin(epsilon) * sin(lambda_sun))
+    
+    # Greenwich hour angle
+    gmst = 6.697375 + 0.0657098242 * n + time.hour + time.minute/60 + time.second/3600
+    lmst = gmst + lon/15
+    ha = radians(lmst * 15 - degrees(ra))
+    
+    lat_rad = radians(lat)
+    # Elevation
+    el = asin(sin(dec) * sin(lat_rad) + cos(dec) * cos(lat_rad) * cos(ha))
+    # Azimuth
+    az = atan2(-sin(ha), tan(dec) * cos(lat_rad) - sin(lat_rad) * cos(ha))
+    
+    return degrees(el), degrees(az) % 360
+
+
+def is_satellite_illuminated(sat_pos, time: datetime) -> bool:
+    """Check if satellite is illuminated by sun (simplified)."""
+    from math import sqrt, radians, sin, cos, atan2, asin
+    # Sun direction vector (unit vector from Earth to sun)
+    sat_x, sat_y, sat_z = sat_pos
+    sat_dist = sqrt(sat_x*sat_x + sat_y*sat_y + sat_z*sat_z)
+    
+    # Sun direction vector (unit vector from Earth to sun)
+    n = time.timestamp() / 86400 + 2440587.5 - 2451545.0
+    L = radians(280.460 + 0.9856474 * n)
+    g = radians(357.528 + 0.9856003 * n)
+    lambda_sun = L + radians(1.915) * sin(g) + radians(0.020) * sin(2*g)
+    epsilon = radians(23.439 - 0.0000004 * n)
+    ra = atan2(cos(epsilon) * sin(lambda_sun), cos(lambda_sun))
+    dec = asin(sin(epsilon) * sin(lambda_sun))
+    
+    sun_x = cos(ra) * cos(dec)
+    sun_y = sin(ra) * cos(dec)
+    sun_z = sin(dec)
+    
+    # Satellite position vector from Earth center
+    dot = sat_x * sun_x + sat_y * sun_y + sat_z * sun_z
+    
+    # Satellite is illuminated if not in Earth's umbra
+    # Umbra condition: dot(R, S) < -R_earth (satellite behind Earth, within shadow cone)
+    # R_earth = 6371 km
+    return dot > -6371
+
+
+def show_satellite_passes():
+    """Show satellite passes menu and predictions."""
+    from rich.prompt import Prompt
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    
+    # Get or set observer location
+    lat = config.get("observer_lat")
+    lon = config.get("observer_lon")
+    alt = config.get("observer_alt", 0)
+    
+    if lat is None or lon is None:
+        clear_screen()
+        console.print("[bold cyan]Satellite Passes - Set Your Location[/bold cyan]\n")
+        console.print("Enter your location for accurate pass predictions.\n")
+        
+        try:
+            lat_str = Prompt.ask("Latitude (e.g., 51.5074)", default="0")
+            lon_str = Prompt.ask("Longitude (e.g., -0.1278)", default="0")
+            alt_str = Prompt.ask("Altitude in meters (optional)", default="0")
+            
+            lat = float(lat_str)
+            lon = float(lon_str)
+            alt = float(alt_str)
+            
+            config.set("observer_lat", lat)
+            config.set("observer_lon", lon)
+            config.set("observer_alt", alt)
+            console.print(f"\n[green]Location saved: {lat:.4f}, {lon:.4f}, {alt}m[/green]")
+            time.sleep(1)
+        except Exception:
+            console.print("[red]Invalid coordinates[/red]")
+            time.sleep(1)
+            return
+    
+    while True:
+        clear_screen()
+        console.print(f"[bold cyan]Satellite Passes[/bold cyan] (Location: {lat:.4f}, {lon:.4f})\n")
+        console.print("  [bold white]1[/bold white] Predict passes for next 3 days")
+        console.print("  [bold white]2[/bold white] Predict passes for specific satellite")
+        console.print("  [bold white]3[/bold white] Change location")
+        console.print("  [bold white]4[/bold white] Back to main menu\n")
+        
+        choice = Prompt.ask("Select option", choices=["1", "2", "3", "4"], default="1")
+        
+        if choice == "4":
+            return
+        elif choice == "3":
+            # Reset location
+            config.set("observer_lat", None)
+            config.set("observer_lon", None)
+            console.print("[yellow]Location reset[/yellow]")
+            time.sleep(1)
+            continue
+        elif choice == "1":
+            predict_passes(lat, lon, alt, days=3)
+        elif choice == "2":
+            predict_specific_satellite(lat, lon, alt)
+
+
+def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
+    """Predict passes for all tracked satellites."""
+    clear_screen()
+    console.print(f"[bold cyan]Fetching TLE data and calculating passes for {days} days...[/bold cyan]\n")
+    
+    # Fetch TLE data for stations (ISS, Tiangong, etc.) and Starlink
+    all_satellites = []
+    for group in ["stations", "starlink"]:
+        sats = fetch_tle_data(group)
+        all_satellites.extend(sats)
+    
+    if not all_satellites:
+        console.print("[bold red]Error: Could not fetch satellite data[/bold red]")
+        input("\nPress Enter to return...")
+        return
+    
+    console.print(f"[green]Loaded {len(all_satellites)} satellites[/green]\n")
+    console.print("[dim]Calculating passes...[/dim]")
+    
+    passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
+    
+    if not passes:
+        console.print("[yellow]No visible passes found for the next {} days[/yellow]".format(days))
+        input("\nPress Enter to return...")
+        return
+    
+    # Group by satellite
+    from collections import defaultdict
+    passes_by_sat = defaultdict(list)
+    for p in passes:
+        passes_by_sat[p["name"]].append(p)
+    
+    # Sort by first pass time
+    sorted_sats = sorted(passes_by_sat.items(), key=lambda x: x[1][0]["start"])
+    
+    clear_screen()
+    console.print(f"[bold cyan]Visible Satellite Passes ({days} days)[/bold cyan]")
+    console.print(f"Location: {lat:.4f}, {lon:.4f}, {alt}m\n")
+    
+    for name, sat_passes in sorted_sats:
+        if not sat_passes:
+            continue
+        console.print(f"\n[bold white]{name}[/bold white]")
+        for p in sat_passes[:5]:  # Limit to 5 passes per satellite
+            start_str = p["start"].strftime("%m-%d %H:%M UTC")
+            end_str = p["end"].strftime("%H:%M")
+            max_el = p["max_elevation"]
+            dir_str = f"{p['start_azimuth']:.0f}°→{p['end_azimuth']:.0f}°"
+            dur = int(p["duration"])
+            visible = "✓" if p["visible"] else "✗"
+            color = "green" if p["visible"] else "dim"
+            console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min  {visible}[/{color}]")
+    
+    input("\nPress Enter to return...")
+
+
+def predict_specific_satellite(lat: float, lon: float, alt: float):
+    """Predict passes for a specific satellite."""
+    clear_screen()
+    console.print("[bold cyan]Specific Satellite Prediction[/bold cyan]\n")
+    console.print("[yellow]Feature in development[/yellow]")
+    input("\nPress Enter to return...")
     """Format ISS position for display."""
     if not data:
         return "[red]Unable to fetch ISS position[/red]"
@@ -1020,7 +1462,10 @@ def create_launches_panel_list(launches: list[dict]) -> list:
         text.append(f"    {rocket} / {provider}\n", style="green")
         text.append(f"    {window_start}  ", style="white")
         if countdown:
-            text.append(f" {countdown}  ", style="")
+            countdown_text = Text.from_markup(countdown)
+            text.append(" ")
+            text.append_text(countdown_text)
+            text.append("  ")
         text.append(f"[{status}]", style=status_style)
 
         panels.append(Panel(text, border_style="dim", padding=(0, 1)))
@@ -1151,7 +1596,7 @@ def show_launch_detail(launch: dict):
 
 
 def show_main_menu():
-    """Show main menu with 5 options."""
+    """Show main menu with 6 options."""
     from rich.align import Align
     from rich.panel import Panel
     from rich.text import Text
@@ -1175,6 +1620,9 @@ def show_main_menu():
     menu_text.append("Space Weather", style="cyan")
     menu_text.append("\n")
     menu_text.append("  6 ", style="bold white")
+    menu_text.append("Satellite Passes", style="cyan")
+    menu_text.append("\n")
+    menu_text.append("  7 ", style="bold white")
     menu_text.append("Exit", style="cyan")
 
     panel = Panel(
@@ -1230,7 +1678,7 @@ def parse_args():
     )
     parser.add_argument(
         "--mode",
-        choices=["people", "apod", "launches", "iss", "weather"],
+        choices=["people", "apod", "launches", "iss", "weather", "passes"],
         help="Start directly in a specific mode",
     )
     parser.add_argument(
@@ -1271,15 +1719,17 @@ def main():
             show_iss_position()
         elif args.mode == "weather":
             show_space_weather()
+        elif args.mode == "passes":
+            show_satellite_passes()
         return
     
     while True:
         clear_screen()
         show_main_menu()
         console.print()
-        choice = console.input("[bold cyan]Select option [1-6]: [/bold cyan]").strip().lower()
+        choice = console.input("[bold cyan]Select option [1-7]: [/bold cyan]").strip().lower()
 
-        if choice in ("6", "quit", "exit", "q"):
+        if choice in ("7", "quit", "exit", "q"):
             break
         elif choice == "1":
             result = handle_people_in_space()
@@ -1293,6 +1743,8 @@ def main():
             show_iss_position()
         elif choice == "5":
             show_space_weather()
+        elif choice == "6":
+            show_satellite_passes()
         else:
             console.print("[red]Invalid option[/red]")
             time.sleep(1)
