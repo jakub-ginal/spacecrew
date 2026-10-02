@@ -1537,9 +1537,13 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
                 max_el = p["max_elevation"]
                 dir_str = f"{p['start_azimuth']:.0f}°→{p['end_azimuth']:.0f}°"
                 dur = int(p["duration"])
+                mag = p.get("magnitude", 99)
+                quality = p.get("quality", 0)
+                mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
+                qual_str = f"  Q{quality}" if quality > 0 else ""
                 visible = "✓" if p["visible"] else "✗"
                 color = "green" if p["visible"] else "dim"
-                console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min  {visible}[/{color}]")
+                console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}  {visible}[/{color}]")
         
         console.print("\n  [bold white]r[/bold white] Recalculate  [bold white]b[/bold white] Back")
         action = Prompt.ask("Action", choices=["r", "b"], default="b")
@@ -1661,9 +1665,13 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
             max_el = p["max_elevation"]
             dir_str = f"{p['start_azimuth']:.0f}°→{p['end_azimuth']:.0f}°"
             dur = int(p["duration"])
+            mag = p.get("magnitude", 99)
+            quality = p.get("quality", 0)
+            mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
+            qual_str = f"  Q{quality}" if quality > 0 else ""
             visible = "✓" if p["visible"] else "✗"
             color = "green" if p["visible"] else "dim"
-            console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min  {visible}[/{color}]")
+            console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}  {visible}[/{color}]")
     
     input("\nPress Enter to return...")
 
