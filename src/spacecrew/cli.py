@@ -140,11 +140,9 @@ class Cache:
             conn.commit()
 
 
-# Global instances
 config = Config()
 cache = Cache(CACHE_DB)
 
-# In-memory session cache (fallback for current session)
 _apod_cache: dict[str, dict] = {}
 _launches_cache: list[dict] | None = None
 _iss_cache: dict | None = None
@@ -509,7 +507,6 @@ def show_iss_position():
         show_iss_position()
 
 
-# Launches feature
 LAUNCHES_API_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
 
 
@@ -717,7 +714,6 @@ def format_iss_position(data: dict) -> str:
     return text
 
 
-# Space Weather feature
 DONKI_API_BASE = "https://ccmc.gsfc.nasa.gov/DONKI/WS/get"
 NOAA_SWPC_BASE = "https://services.swpc.noaa.gov"
 
@@ -916,7 +912,6 @@ def show_space_weather():
             return show_space_weather()
 
 
-# Satellite Passes feature
 CELESTRAK_TLE_URLS = {
     "iss": "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=tle",
     "stations": "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle",
@@ -939,12 +934,12 @@ def fetch_tle_data(group: str = "stations") -> list[dict]:
     global _tle_cache
     cache_key = f"tle:{group}"
     
-    if _tle_cache is not None:
-        return _tle_cache
+    if group in _tle_cache:
+        return _tle_cache[group]
     
     cached = cache.get(cache_key, 1)  # 1 day TTL
     if cached:
-        _tle_cache = cached
+        _tle_cache[group] = cached
         return cached
     
     if _global_offline:
@@ -963,7 +958,7 @@ def fetch_tle_data(group: str = "stations") -> list[dict]:
                     line2 = lines[i + 2].strip()
                     if line1.startswith("1 ") and line2.startswith("2 "):
                         satellites.append({"name": name, "line1": line1, "line2": line2})
-            _tle_cache = satellites
+            _tle_cache[group] = satellites
             cache.set(cache_key, satellites)
             return satellites
     except Exception:
@@ -971,7 +966,7 @@ def fetch_tle_data(group: str = "stations") -> list[dict]:
     return []
 
 
-_tle_cache: list[dict] | None = None
+_tle_cache: dict[str, list[dict]] = {}
 
 
 def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: float, obs_alt: float, days: int = 3) -> list[dict]:
@@ -1208,17 +1203,17 @@ def show_satellite_passes():
     while True:
         clear_screen()
         console.print(f"[bold cyan]Satellite Passes[/bold cyan] (Location: {lat:.4f}, {lon:.4f})\n")
-        console.print("  [bold white]1[/bold white] Predict passes for next 3 days")
-        console.print("  [bold white]2[/bold white] Predict passes for specific satellite")
-        console.print("  [bold white]3[/bold white] Change location")
-        console.print("  [bold white]4[/bold white] Back to main menu\n")
+        console.print("  [bold white]1[/bold white] Predict passes (menu)")
+        console.print("  [bold white]2[/bold white] Tonight's best passes (quick)")
+        console.print("  [bold white]3[/bold white] Specific satellite")
+        console.print("  [bold white]4[/bold white] Change location")
+        console.print("  [bold white]5[/bold white] Back to main menu\n")
         
-        choice = Prompt.ask("Select option", choices=["1", "2", "3", "4"], default="1")
+        choice = Prompt.ask("Select option", choices=["1", "2", "3", "4", "5"], default="2")
         
-        if choice == "4":
+        if choice == "5":
             return
-        elif choice == "3":
-            # Reset location
+        elif choice == "4":
             config.set("observer_lat", None)
             config.set("observer_lon", None)
             console.print("[yellow]Location reset[/yellow]")
@@ -1227,53 +1222,232 @@ def show_satellite_passes():
         elif choice == "1":
             predict_passes(lat, lon, alt, days=3)
         elif choice == "2":
+            predict_passes(lat, lon, alt, days=1)  # Tonight only
+        elif choice == "3":
             predict_specific_satellite(lat, lon, alt)
 
 
 def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
     """Predict passes for all tracked satellites."""
+    from rich.prompt import Prompt
+    
+    while True:
+        clear_screen()
+        console.print("[bold cyan]Satellite Pass Predictions[/bold cyan]\n")
+        console.print("  [bold white]1[/bold white] All satellites (stations + Starlink) - next {} days".format(days))
+        console.print("  [bold white]2[/bold white] Tonight only (next 24 hours)")
+        console.print("  [bold white]3[/bold white] Stations only (ISS, Tiangong, Hubble, etc.)")
+        console.print("  [bold white]4[/bold white] Starlink only (quick mode: first 200)")
+        console.print("  [bold white]5[/bold white] Change days (currently {})".format(days))
+        console.print("  [bold white]6[/bold white] Back\n")
+        
+        choice = Prompt.ask("Select option", choices=["1", "2", "3", "4", "5", "6"], default="1")
+        
+        if choice == "6":
+            return
+        elif choice == "5":
+            try:
+                days = int(Prompt.ask("Days to predict (1-7)", default=str(days)))
+                days = max(1, min(7, days))
+            except ValueError:
+                pass
+            continue
+        
+        clear_screen()
+        
+        if choice == "1":
+            groups = ["stations", "starlink"]
+            limit = None
+            title = "All Satellites ({} days)".format(days)
+        elif choice == "2":
+            groups = ["stations", "starlink"]
+            limit = None
+            title = "Tonight Only (24 hours)"
+            days = 1
+        elif choice == "3":
+            groups = ["stations"]
+            limit = None
+            title = "Stations Only ({} days)".format(days)
+        elif choice == "4":
+            groups = ["starlink"]
+            limit = 200
+            title = "Starlink Quick Mode (first 200, {} days)".format(days)
+        
+        console.print("[bold cyan]Fetching TLE data...[/bold cyan]\n")
+        
+        all_satellites = []
+        for group in groups:
+            sats = fetch_tle_data(group)
+            if limit and len(sats) > limit:
+                sats = sats[:limit]
+            all_satellites.extend(sats)
+        
+        if not all_satellites:
+            console.print("[bold red]Error: Could not fetch satellite data[/bold red]")
+            input("\nPress Enter to return...")
+            return
+        
+        console.print(f"[green]Loaded {len(all_satellites)} satellites[/green]\n")
+        console.print("[dim]Calculating passes...[/dim]")
+        
+        passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
+        
+        if choice == "2":
+            # Filter to tonight only (next 24 hours)
+            now = datetime.now(timezone.utc)
+            cutoff = now + timedelta(hours=24)
+            passes = [p for p in passes if p["start"] < cutoff]
+        
+        if not passes:
+            console.print("[yellow]No visible passes found[/yellow]")
+            input("\nPress Enter to return...")
+            continue
+        
+        # Group by satellite
+        from collections import defaultdict
+        passes_by_sat = defaultdict(list)
+        for p in passes:
+            passes_by_sat[p["name"]].append(p)
+        
+        # Sort by first pass time
+        sorted_sats = sorted(passes_by_sat.items(), key=lambda x: x[1][0]["start"])
+        
+        clear_screen()
+        console.print(f"[bold cyan]{title}[/bold cyan]")
+        console.print(f"Location: {lat:.4f}, {lon:.4f}, {alt}m\n")
+        
+        total_passes = sum(len(v) for v in passes_by_sat.values())
+        console.print(f"[dim]{len(passes_by_sat)} satellites, {total_passes} total passes[/dim]\n")
+        
+        for name, sat_passes in sorted_sats:
+            if not sat_passes:
+                continue
+            console.print(f"\n[bold white]{name}[/bold white]")
+            for p in sat_passes[:5]:
+                start_str = p["start"].strftime("%m-%d %H:%M UTC")
+                end_str = p["end"].strftime("%H:%M")
+                max_el = p["max_elevation"]
+                dir_str = f"{p['start_azimuth']:.0f}°→{p['end_azimuth']:.0f}°"
+                dur = int(p["duration"])
+                visible = "✓" if p["visible"] else "✗"
+                color = "green" if p["visible"] else "dim"
+                console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min  {visible}[/{color}]")
+        
+        console.print("\n  [bold white]r[/bold white] Recalculate  [bold white]b[/bold white] Back")
+        action = Prompt.ask("Action", choices=["r", "b"], default="b")
+        if action == "b":
+            continue
+        # If 'r', loop continues and recalculates
+
+
+def predict_specific_satellite(lat: float, lon: float, alt: float):
+    """Predict passes for a specific satellite."""
+    from rich.prompt import Prompt
+    from rich.table import Table
+    
+    while True:
+        clear_screen()
+        console.print("[bold cyan]Specific Satellite Prediction[/bold cyan]\n")
+        
+        # Select satellite group
+        console.print("Select satellite group:")
+        groups = list(CELESTRAK_TLE_URLS.keys())
+        for i, g in enumerate(groups, 1):
+            console.print(f"  [bold white]{i}[/bold white] {g.capitalize()}")
+        console.print(f"  [bold white]{len(groups)+1}[/bold white] Back\n")
+        
+        choice = Prompt.ask("Select group", choices=[str(i) for i in range(1, len(groups)+2)], default="1")
+        if int(choice) == len(groups) + 1:
+            return
+        
+        group = groups[int(choice) - 1]
+        
+        # Fetch TLE data for selected group
+        clear_screen()
+        console.print(f"[bold cyan]Fetching {group} TLE data...[/bold cyan]\n")
+        satellites = fetch_tle_data(group)
+        
+        if not satellites:
+            console.print("[bold red]Error: Could not fetch satellite data[/bold red]")
+            input("\nPress Enter to return...")
+            continue
+        
+        console.print(f"[green]Loaded {len(satellites)} satellites from {group}[/green]\n")
+        
+        # Search/filter
+        search = Prompt.ask("Search satellite name (or press Enter to list all)", default="").strip().lower()
+        
+        filtered = [s for s in satellites if search in s["name"].lower()] if search else satellites
+        
+        if not filtered:
+            console.print("[yellow]No matches found[/yellow]")
+            time.sleep(1)
+            continue
+        
+        # Show list with numbers
+        clear_screen()
+        console.print(f"[bold cyan]{group.capitalize()} Satellites[/bold cyan] ({len(filtered)} matches)\n")
+        
+        # Show in pages of 20
+        page_size = 20
+        total_pages = (len(filtered) + page_size - 1) // page_size
+        page = 0
+        
+        while True:
+            clear_screen()
+            console.print(f"[bold cyan]{group.capitalize()} Satellites[/bold cyan] (Page {page+1}/{total_pages})\n")
+            
+            start = page * page_size
+            end = min(start + page_size, len(filtered))
+            
+            for i in range(start, end):
+                sat = filtered[i]
+                console.print(f"  [bold white]{i+1}[/bold white] {sat['name']}")
+            
+            console.print("\n  [bold white]n[/bold white] Next page  [bold white]p[/bold white] Previous  [bold white]s[/bold white] Search again  [bold white]b[/bold white] Back")
+            
+            action = Prompt.ask("Select satellite number or action", choices=["n", "p", "s", "b"] + [str(i+1) for i in range(start, end)], default="b")
+            
+            if action == "b":
+                break
+            elif action == "s":
+                break  # Will re-prompt search
+            elif action == "n" and page < total_pages - 1:
+                page += 1
+                continue
+            elif action == "p" and page > 0:
+                page -= 1
+                continue
+            else:
+                # Selected a satellite
+                idx = int(action) - 1
+                selected = filtered[idx]
+                show_satellite_detail(selected, lat, lon, alt)
+                break
+        
+        if action == "s":
+            continue  # Re-search
+        elif action == "b":
+            continue  # Back to group selection
+        else:
+            return  # After showing detail, return to main menu
+
+
+def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
+    """Show detailed passes for a specific satellite."""
     clear_screen()
-    console.print(f"[bold cyan]Fetching TLE data and calculating passes for {days} days...[/bold cyan]\n")
+    console.print(f"[bold cyan]Calculating passes for {sat['name']}...[/bold cyan]\n")
     
-    # Fetch TLE data for stations (ISS, Tiangong, etc.) and Starlink
-    all_satellites = []
-    for group in ["stations", "starlink"]:
-        sats = fetch_tle_data(group)
-        all_satellites.extend(sats)
+    passes = calculate_visible_passes([sat], lat, lon, alt, days=7)
     
-    if not all_satellites:
-        console.print("[bold red]Error: Could not fetch satellite data[/bold red]")
-        input("\nPress Enter to return...")
-        return
-    
-    console.print(f"[green]Loaded {len(all_satellites)} satellites[/green]\n")
-    console.print("[dim]Calculating passes...[/dim]")
-    
-    passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
+    clear_screen()
+    console.print(f"[bold cyan]{sat['name']}[/bold cyan] - Next 7 Days\n")
+    console.print(f"Location: {lat:.4f}, {lon:.4f}\n")
     
     if not passes:
-        console.print("[yellow]No visible passes found for the next {} days[/yellow]".format(days))
-        input("\nPress Enter to return...")
-        return
-    
-    # Group by satellite
-    from collections import defaultdict
-    passes_by_sat = defaultdict(list)
-    for p in passes:
-        passes_by_sat[p["name"]].append(p)
-    
-    # Sort by first pass time
-    sorted_sats = sorted(passes_by_sat.items(), key=lambda x: x[1][0]["start"])
-    
-    clear_screen()
-    console.print(f"[bold cyan]Visible Satellite Passes ({days} days)[/bold cyan]")
-    console.print(f"Location: {lat:.4f}, {lon:.4f}, {alt}m\n")
-    
-    for name, sat_passes in sorted_sats:
-        if not sat_passes:
-            continue
-        console.print(f"\n[bold white]{name}[/bold white]")
-        for p in sat_passes[:5]:  # Limit to 5 passes per satellite
+        console.print("[yellow]No visible passes in the next 7 days[/yellow]")
+    else:
+        for p in passes[:10]:
             start_str = p["start"].strftime("%m-%d %H:%M UTC")
             end_str = p["end"].strftime("%H:%M")
             max_el = p["max_elevation"]
@@ -1284,70 +1458,6 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
             console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min  {visible}[/{color}]")
     
     input("\nPress Enter to return...")
-
-
-def predict_specific_satellite(lat: float, lon: float, alt: float):
-    """Predict passes for a specific satellite."""
-    clear_screen()
-    console.print("[bold cyan]Specific Satellite Prediction[/bold cyan]\n")
-    console.print("[yellow]Feature in development[/yellow]")
-    input("\nPress Enter to return...")
-    """Format ISS position for display."""
-    if not data:
-        return "[red]Unable to fetch ISS position[/red]"
-    
-    pos = data.get("iss_position", {})
-    lat = pos.get("latitude", "N/A")
-    lon = pos.get("longitude", "N/A")
-    timestamp = data.get("timestamp", 0)
-    
-    dt = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
-    time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-    
-    # Try to get location name
-    location_name = "Unknown"
-    try:
-        lat_f = float(lat)
-        lon_f = float(lon)
-        location_name = get_location_name(lat_f, lon_f)
-    except (ValueError, TypeError):
-        pass
-    
-    # Get extra data from WhereTheISS.at if available
-    extra_info = ""
-    if data.get("source") == "wheretheiss_at":
-        # We need to fetch fresh data for altitude/velocity
-        try:
-            res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=15, max_retries=1)
-            if res and res.status_code == 200:
-                w_data = res.json()
-                altitude = w_data.get("altitude")
-                velocity = w_data.get("velocity")
-                visibility = w_data.get("visibility")
-                if altitude:
-                    extra_info += f"Altitude:  {altitude:.1f} km\n"
-                if velocity:
-                    extra_info += f"Velocity:  {velocity:.0f} km/h\n"
-                if visibility:
-                    extra_info += f"Visibility: {visibility}\n"
-        except Exception:
-            pass
-    
-    # Google Maps link with red pin marker
-    maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-    
-    text = Text()
-    text.append("ISS Current Position\n", style="bold cyan")
-    text.append(f"Latitude:  {lat}\n", style="white")
-    text.append(f"Longitude: {lon}\n", style="white")
-    text.append(f"Location:  {location_name}\n", style="white")
-    if extra_info:
-        text.append(f"{extra_info}", style="white")
-    text.append(f"Time:      {time_str}\n", style="white")
-    text.append(f"\nView on map: ", style="dim")
-    text.append(f"[link={maps_url}]Google Maps (with marker)[/link]", style="blue")
-    
-    return text
 
 
 def format_launch_datetime(iso_str: str) -> str:
