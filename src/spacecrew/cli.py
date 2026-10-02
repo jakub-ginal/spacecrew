@@ -972,7 +972,7 @@ _tle_cache: dict[str, list[dict]] = {}
 def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: float, obs_alt: float, days: int = 3) -> list[dict]:
     """Calculate visible passes for satellites from observer location."""
     from sgp4.api import Satrec, jday
-    from math import degrees, radians, sin, cos, sqrt, atan2, asin
+    from math import degrees, radians, sin, cos, sqrt, atan2, asin, acos
     
     passes = []
     now = datetime.now(timezone.utc)
@@ -995,6 +995,7 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
             pass_start = None
             pass_max_el = 0
             pass_max_time = None
+            pass_max_pos = None
             pass_start_az = 0
             pass_end_az = 0
             
@@ -1069,12 +1070,14 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                         pass_start = check_time
                         pass_max_el = elevation
                         pass_max_time = check_time
+                        pass_max_pos = r  # store TEME position at max
                         pass_start_az = azimuth
                     elif visible and in_pass:
                         # Continue pass, track max elevation
                         if elevation > pass_max_el:
                             pass_max_el = elevation
                             pass_max_time = check_time
+                            pass_max_pos = r  # update TEME position at max
                     elif not visible and in_pass:
                         # Pass end
                         in_pass = False
@@ -1082,6 +1085,76 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                         if pass_start and pass_max_el > 15:  # Only keep passes with decent max elevation
                             duration = (check_time - pass_start).total_seconds() / 60
                             if duration > 1:  # At least 1 minute
+                                # Calculate magnitude at max elevation
+                                std_mag = get_std_magnitude(sat_name)
+                                
+                                # Convert max_pos from TEME to ECEF
+                                jd_max, fr_max = jday(pass_max_time.year, pass_max_time.month, pass_max_time.day, pass_max_time.hour, pass_max_time.minute, pass_max_time.second)
+                                gast_max = (280.46061837 + 360.98564736629 * (jd_max - 2451545.0) + fr_max * 360.98564736629) % 360
+                                gast_max_rad = radians(gast_max)
+                                cos_g = cos(gast_max_rad)
+                                sin_g = sin(gast_max_rad)
+                                sat_x = pass_max_pos[0] * cos_g - pass_max_pos[1] * sin_g
+                                sat_y = pass_max_pos[0] * sin_g + pass_max_pos[1] * cos_g
+                                sat_z = pass_max_pos[2]
+                                
+                                # Range at max elevation
+                                dx = sat_x - obs_x
+                                dy = sat_y - obs_y
+                                dz = sat_z - obs_z
+                                range_km = sqrt(dx*dx + dy*dy + dz*dz)
+                                
+                                # Calculate phase angle
+                                # Sun position vector
+                                sun_el, sun_az = calculate_sun_position(pass_max_time, obs_lat, obs_lon)
+                                n_sun = pass_max_time.timestamp() / 86400 + 2440587.5 - 2451545.0
+                                L_sun = radians(280.460 + 0.9856474 * n_sun)
+                                g_sun = radians(357.528 + 0.9856003 * n_sun)
+                                lambda_sun = L_sun + radians(1.915) * sin(g_sun) + radians(0.020) * sin(2*g_sun)
+                                epsilon = radians(23.439 - 0.0000004 * n_sun)
+                                ra_sun = atan2(cos(epsilon) * sin(lambda_sun), cos(lambda_sun))
+                                dec_sun = asin(sin(epsilon) * sin(lambda_sun))
+                                sun_x = cos(ra_sun) * cos(dec_sun)
+                                sun_y = sin(ra_sun) * cos(dec_sun)
+                                sun_z = sin(dec_sun)
+                                
+                                # Phase angle
+                                sat_dist = sqrt(sat_x**2 + sat_y**2 + sat_z**2)
+                                to_sun_x = sun_x * sat_dist - sat_x
+                                to_sun_y = sun_y * sat_dist - sat_y
+                                to_sun_z = sun_z * sat_dist - sat_z
+                                to_obs_x = -dx
+                                to_obs_y = -dy
+                                to_obs_z = -dz
+                                
+                                sun_dist = sqrt(to_sun_x**2 + to_sun_y**2 + to_sun_z**2)
+                                obs_dist = range_km
+                                
+                                if sun_dist > 0 and obs_dist > 0:
+                                    to_sun_x /= sun_dist
+                                    to_sun_y /= sun_dist
+                                    to_sun_z /= sun_dist
+                                    to_obs_x /= obs_dist
+                                    to_obs_y /= obs_dist
+                                    to_obs_z /= obs_dist
+                                    dot = to_sun_x * to_obs_x + to_sun_y * to_obs_y + to_sun_z * to_obs_z
+                                    dot = max(-1.0, min(1.0, dot))
+                                    phase_angle = degrees(acos(dot))
+                                else:
+                                    phase_angle = 0.0
+                                
+                                # Calculate magnitude
+                                magnitude = calculate_magnitude(std_mag, range_km, phase_angle)
+                                
+                                # Calculate rarity
+                                rarity = get_rarity_bonus(sat_name)
+                                
+                                # Sun elevation at max time
+                                sun_el_max, _ = calculate_sun_position(pass_max_time, obs_lat, obs_lon)
+                                
+                                # Quality score
+                                quality = calculate_pass_quality(pass_max_el, duration, sun_el_max, magnitude, rarity)
+                                
                                 passes.append({
                                     "name": sat_name,
                                     "start": pass_start,
@@ -1091,7 +1164,9 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                     "start_azimuth": pass_start_az,
                                     "end_azimuth": pass_end_az,
                                     "duration": duration,
-                                    "visible": True
+                                    "visible": True,
+                                    "magnitude": magnitude,
+                                    "quality": quality
                                 })
         
         except Exception:
@@ -1162,6 +1237,139 @@ def is_satellite_illuminated(sat_pos, time: datetime) -> bool:
     # Umbra condition: dot(R, S) < -R_earth (satellite behind Earth, within shadow cone)
     # R_earth = 6371 km
     return dot > -6371
+
+
+# Standard magnitudes at 1000km, 90° phase (from satellite catalogs)
+SAT_STD_MAGNITUDES = {
+    "ISS": -1.3,
+    "ZARYA": -1.3,
+    "NAUKA": -1.3,
+    "TIANGONG": -0.5,
+    "CSS": -0.5,
+    "HST": 2.0,
+    "HUBBLE": 2.0,
+    "STARLINK": 5.5,
+    "STARLINK-": 5.5,
+    "GPS": 4.0,
+    "IRIDIUM": 6.5,
+    "IRIDIUM-": 6.5,
+    "NOAA": 5.0,
+    "METEOSAT": 5.0,
+    "GOES": 5.0,
+    "DMSP": 5.0,
+    "LANDSAT": 5.0,
+    "SENTINEL": 5.0,
+    "TERRA": 5.0,
+    "AQUA": 5.0,
+    "SUOMI": 5.0,
+    "JPSS": 5.0,
+    "COSMOS": 5.5,
+    "SOYUZ": 3.0,
+    "PROGRESS": 3.0,
+    "CREW DRAGON": 2.0,
+    "DRAGON": 2.0,
+    "CYGNUS": 3.0,
+    "FREGAT": 4.0,
+    "ROCKET": 4.5,
+    "DEB": 6.0,
+    "DEBRIS": 6.5,
+    "CZ-": 4.0,
+    "CZ": 4.0,
+}
+
+
+def get_std_magnitude(name: str) -> float:
+    """Get standard magnitude for a satellite by name pattern matching."""
+    name_upper = name.upper()
+    for pattern, mag in SAT_STD_MAGNITUDES.items():
+        if pattern in name_upper:
+            return mag
+    return 5.5  # default for unknown
+
+
+def calculate_magnitude(std_mag: float, range_km: float, phase_angle_deg: float) -> float:
+    """Calculate apparent magnitude from standard magnitude, range, and phase angle."""
+    from math import log10, cos, radians
+    # Range correction: 5 * log10(range / 1000)
+    range_corr = 5.0 * log10(range_km / 1000.0)
+    # Phase correction: -2.5 * log10((1 + cos(phase)) / 2)
+    # At 0° phase (fully lit): correction = 0
+    # At 90° phase (half lit): correction = 0.75
+    # At 180° phase (dark): correction -> large (satellite in shadow)
+    if phase_angle_deg >= 170:
+        return 99.0  # effectively invisible (in shadow)
+    phase_rad = radians(phase_angle_deg)
+    phase_corr = -2.5 * log10((1.0 + cos(phase_rad)) / 2.0)
+    return std_mag + range_corr + phase_corr
+
+
+def calculate_phase_angle(sat_pos, sun_pos, obs_pos) -> float:
+    """Calculate phase angle (Sun-Satellite-Observer angle) in degrees."""
+    from math import sqrt, acos, degrees
+    sat_x, sat_y, sat_z = sat_pos
+    sun_x, sun_y, sun_z = sun_pos
+    obs_x, obs_y, obs_z = obs_pos
+    
+    # Vector from satellite to sun
+    to_sun_x = sun_x - sat_x
+    to_sun_y = sun_y - sat_y
+    to_sun_z = sun_z - sat_z
+    
+    # Vector from satellite to observer
+    to_obs_x = obs_x - sat_x
+    to_obs_y = obs_y - sat_y
+    to_obs_z = obs_z - sat_z
+    
+    # Normalize
+    sun_dist = sqrt(to_sun_x**2 + to_sun_y**2 + to_sun_z**2)
+    obs_dist = sqrt(to_obs_x**2 + to_obs_y**2 + to_obs_z**2)
+    
+    if sun_dist == 0 or obs_dist == 0:
+        return 0.0
+    
+    to_sun_x /= sun_dist
+    to_sun_y /= sun_dist
+    to_sun_z /= sun_dist
+    to_obs_x /= obs_dist
+    to_obs_y /= obs_dist
+    to_obs_z /= obs_dist
+    
+    # Dot product for angle
+    dot = to_sun_x * to_obs_x + to_sun_y * to_obs_y + to_sun_z * to_obs_z
+    dot = max(-1.0, min(1.0, dot))
+    return degrees(acos(dot))
+
+
+def calculate_pass_quality(elevation: float, duration: float, sun_el: float, magnitude: float, rarity: float = 1.0) -> int:
+    """Calculate pass quality score 0-100."""
+    # Normalize each component to 0-1
+    elev_score = min(1.0, max(0.0, (elevation - 10) / 80))  # 10°->0, 90°->1
+    dur_score = min(1.0, max(0.0, (duration - 1) / 9))       # 1min->0, 10min->1
+    dark_score = min(1.0, max(0.0, (-sun_el - 6) / 12))      # sun -6°->0, -18°->1
+    mag_score = min(1.0, max(0.0, (6.5 - magnitude) / 10))   # mag +6.5->0, -3.5->1
+    
+    # Weighted combination
+    score = (
+        0.30 * elev_score +
+        0.20 * dur_score +
+        0.25 * dark_score +
+        0.15 * mag_score +
+        0.10 * rarity
+    ) * 100
+    
+    return int(round(score))
+
+
+def get_rarity_bonus(name: str) -> float:
+    """Get rarity bonus 0-1 based on satellite type."""
+    name_upper = name.upper()
+    if any(k in name_upper for k in ["ISS", "ZARYA", "NAUKA", "TIANGONG", "CSS", "HST", "HUBBLE"]):
+        return 1.0
+    if any(k in name_upper for k in ["STARLINK", "IRIDIUM", "GPS", "NOAA", "METEOSAT", "GOES", "DMSP", "LANDSAT", "SENTINEL", "TERRA", "AQUA", "SUOMI", "JPSS"]):
+        return 0.3
+    if any(k in name_upper for k in ["DEB", "DEBRIS", "ROCKET", "CZ-"]):
+        return 0.1
+    return 0.5
 
 
 def show_satellite_passes():
