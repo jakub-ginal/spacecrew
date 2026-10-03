@@ -19,11 +19,157 @@ from PIL import Image
 from rich.columns import Columns
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 from rich.text import Text
+from rich.theme import Theme
 from rich.tree import Tree
 
-console = Console()
+THEMES = {
+    "default": Theme({
+        "info": "cyan",
+        "warning": "yellow",
+        "error": "bold red",
+        "success": "green",
+        "muted": "dim",
+        "highlight": "bold white",
+        "title": "bold cyan",
+        "border": "white",
+        "text": "white",
+        "number": "cyan",
+        "name": "bold white",
+        "country": "green",
+        "rocket": "green",
+        "provider": "green",
+        "date": "white",
+        "status": "white",
+    }),
+    "dark": Theme({
+        "info": "bright_cyan",
+        "warning": "bright_yellow",
+        "error": "bold bright_red",
+        "success": "bright_green",
+        "muted": "dim",
+        "highlight": "bold bright_white",
+        "title": "bold bright_cyan",
+        "border": "bright_white",
+        "text": "bright_white",
+        "number": "bright_cyan",
+        "name": "bold bright_white",
+        "country": "bright_green",
+        "rocket": "bright_green",
+        "provider": "bright_green",
+        "date": "bright_white",
+        "status": "bright_white",
+    }),
+    "solarized": Theme({
+        "info": "#268bd2",
+        "warning": "#b58900",
+        "error": "#dc322f",
+        "success": "#859900",
+        "muted": "#657b83",
+        "highlight": "#eee8d5",
+        "title": "#268bd2",
+        "border": "#93a1a1",
+        "text": "#eee8d5",
+        "number": "#268bd2",
+        "name": "#eee8d5",
+        "country": "#859900",
+        "rocket": "#859900",
+        "provider": "#859900",
+        "date": "#eee8d5",
+        "status": "#eee8d5",
+    }),
+    "dracula": Theme({
+        "info": "#8be9fd",
+        "warning": "#f1fa8c",
+        "error": "#ff5555",
+        "success": "#50fa7b",
+        "muted": "#6272a4",
+        "highlight": "#f8f8f2",
+        "title": "#bd93f9",
+        "border": "#ff79c6",
+        "text": "#f8f8f2",
+        "number": "#8be9fd",
+        "name": "#f8f8f2",
+        "country": "#50fa7b",
+        "rocket": "#50fa7b",
+        "provider": "#50fa7b",
+        "date": "#f8f8f2",
+        "status": "#f8f8f2",
+    }),
+    "monokai": Theme({
+        "info": "#66d9ef",
+        "warning": "#e6db74",
+        "error": "#f92672",
+        "success": "#a6e22e",
+        "muted": "#75715e",
+        "highlight": "#f8f8f2",
+        "title": "#ae81ff",
+        "border": "#f92672",
+        "text": "#f8f8f2",
+        "number": "#66d9ef",
+        "name": "#f8f8f2",
+        "country": "#a6e22e",
+        "rocket": "#a6e22e",
+        "provider": "#a6e22e",
+        "date": "#f8f8f2",
+        "status": "#f8f8f2",
+    }),
+}
+
+def get_console(theme_name: str = "default") -> Console:
+    return Console(theme=THEMES.get(theme_name, THEMES["default"]))
+
+console = get_console()
+
+
+def refresh_console():
+    global console
+    console = get_console(config.get("theme", "default"))
+
+
+def fetch_with_progress(url: str, description: str = "Fetching...", **kwargs):
+    """Fetch URL with a progress spinner."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[info]{task.description}[/info]"),
+        BarColumn(bar_width=30),
+        TaskProgressColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task(description, total=None)
+        try:
+            response = requests.get(url, timeout=kwargs.get("timeout", 30), **kwargs)
+            progress.update(task, completed=1)
+            return response
+        except Exception as e:
+            progress.update(task, completed=1)
+            raise e
+
+
+def multi_fetch_with_progress(urls: list[tuple[str, str]], description: str = "Fetching data..."):
+    """Fetch multiple URLs with progress bar."""
+    results = []
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[info]{task.description}[/info]"),
+        BarColumn(bar_width=40),
+        TaskProgressColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task(description, total=len(urls))
+        for url, label in urls:
+            try:
+                response = requests.get(url, timeout=30)
+                results.append((label, response))
+            except Exception:
+                results.append((label, None))
+            progress.advance(task)
+    return results
+
 
 WIKIMEDIA_THUMB_WIDTH: int = 250
 CONFIG_DIR = Path.home() / ".config" / "spacecrew"
@@ -85,6 +231,8 @@ class Config:
     def set(self, key: str, value):
         self._config[key] = value
         self.save()
+        if key == "theme":
+            refresh_console()
 
 
 class Cache:
@@ -142,6 +290,7 @@ class Cache:
 
 config = Config()
 cache = Cache(CACHE_DB)
+refresh_console()
 
 _apod_cache: dict[str, dict] = {}
 _launches_cache: list[dict] | None = None
@@ -284,9 +433,9 @@ def fetch_photo_panel(url):
 
 def create_mission_table(craft, members):
     table = Table(title=f"Mission: {craft}")
-    table.add_column("No.", style="cyan", justify="right")
-    table.add_column("Name", style="bold white")
-    table.add_column("Country", style="green")
+    table.add_column("No.", style="number", justify="right")
+    table.add_column("Name", style="name")
+    table.add_column("Country", style="country")
 
     for i, m in enumerate(members, 1):
         table.add_row(str(i), str(m.get("name")), str(m.get("country")))
@@ -309,9 +458,9 @@ def calculate_space_experience(launched_timestamp, previous_days):
 
 
 def create_profile_table(person):
-    table = Table(title=f"Profile: {person.get('name')}")
-    table.add_column("Property", style="cyan")
-    table.add_column("Value", style="white", max_width=40)
+    table = Table(title=f"Profile: {person.get('name')}", border_style="border")
+    table.add_column("Property", style="number")
+    table.add_column("Value", style="text", max_width=40)
 
     table.add_row("Country", f"{person.get('country')} {person.get('flag', '')}")
     table.add_row("Position", str(person.get("position") or "N/A"))
@@ -439,33 +588,33 @@ def show_apod_view(target_date: str | None = None):
             photo_panel = Panel(Text(f"[Video] {url}", style="dim yellow"), title="Media", expand=False)
 
         info_text = Text()
-        info_text.append(f"Title: ", style="bold cyan")
-        info_text.append(f"{title}\n", style="white")
-        info_text.append(f"Date: ", style="bold cyan")
-        info_text.append(f"{date}\n", style="white")
+        info_text.append(f"Title: ", style="title")
+        info_text.append(f"{title}\n", style="text")
+        info_text.append(f"Date: ", style="title")
+        info_text.append(f"{date}\n", style="text")
         if author:
-            info_text.append(f"Author: ", style="bold cyan")
-            info_text.append(f"{author}\n", style="white")
+            info_text.append(f"Author: ", style="title")
+            info_text.append(f"{author}\n", style="text")
         if copyright_text:
-            info_text.append(f"Copyright: ", style="bold cyan")
-            info_text.append(f"{copyright_text}\n", style="white")
+            info_text.append(f"Copyright: ", style="title")
+            info_text.append(f"{copyright_text}\n", style="text")
         if hdurl:
-            info_text.append(f"HD URL: ", style="bold cyan")
-            info_text.append(f"[link={hdurl}]Open in browser[/link]\n", style="blue")
-        info_text.append(f"\nExplanation:\n", style="bold cyan")
-        info_text.append(explanation, style="white")
+            info_text.append(f"HD URL: ", style="title")
+            info_text.append(f"[link={hdurl}]Open in browser[/link]\n", style="info")
+        info_text.append(f"\nExplanation:\n", style="title")
+        info_text.append(explanation, style="text")
 
-        info_panel = Panel(info_text, title="APOD Info", expand=False)
+        info_panel = Panel(info_text, title="APOD Info", expand=False, border_style="border")
 
         console.print(Columns([photo_panel, info_panel]))
 
         actions = []
         if media_type == "image" and hdurl:
-            actions.append("[cyan]o[/cyan] - Open HD in browser")
-        actions.append("[cyan]p[/cyan] - Previous day")
-        actions.append("[cyan]Enter[/cyan] - Back to menu")
+            actions.append("[info]o[/info] - Open HD in browser")
+        actions.append("[info]p[/info] - Previous day")
+        actions.append("[info]Enter[/info] - Back to menu")
 
-        console.print(f"\n[bold yellow]Actions:[/bold yellow]  {'  '.join(actions)}")
+        console.print(f"\n[warning]Actions:[/warning]  {'  '.join(actions)}")
         action = input("> ").strip().lower()
 
         if action == "o" and media_type == "image" and hdurl:
@@ -488,18 +637,18 @@ def show_apod_view(target_date: str | None = None):
 def show_iss_position():
     """Show current ISS position."""
     clear_screen()
-    console.print("[bold cyan]Fetching ISS position...[/bold cyan]\n")
+    console.print("[info]Fetching ISS position...[/info]\n")
     
     data = fetch_iss_position()
     if not data:
-        console.print("[bold red]Error: Could not fetch ISS position[/bold red]")
+        console.print("[error]Error: Could not fetch ISS position[/error]")
         input("\nPress Enter to return to menu...")
         return
     
     from rich.panel import Panel
-    console.print(Panel(format_iss_position(data), title="ISS Tracker", border_style="cyan"))
+    console.print(Panel(format_iss_position(data), title="ISS Tracker", border_style="border"))
     
-    console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]r[/cyan] - Refresh  [cyan]Enter[/cyan] - Back")
+    console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Refresh  [info]Enter[/info] - Back")
     choice = input("> ").strip().lower()
     if choice == "r":
         global _iss_cache
@@ -701,15 +850,15 @@ def format_iss_position(data: dict) -> str:
     maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
     
     text = Text()
-    text.append("ISS Current Position\n", style="bold cyan")
-    text.append(f"Latitude:  {lat}\n", style="white")
-    text.append(f"Longitude: {lon}\n", style="white")
-    text.append(f"Location:  {location_name}\n", style="white")
+    text.append("ISS Current Position\n", style="title")
+    text.append(f"Latitude:  {lat}\n", style="text")
+    text.append(f"Longitude: {lon}\n", style="text")
+    text.append(f"Location:  {location_name}\n", style="text")
     if extra_info:
-        text.append(f"{extra_info}", style="white")
-    text.append(f"Time:      {time_str}\n", style="white")
-    text.append(f"\nView on map: ", style="dim")
-    text.append(f"[link={maps_url}]Google Maps (with marker)[/link]", style="blue")
+        text.append(f"{extra_info}", style="text")
+    text.append(f"Time:      {time_str}\n", style="text")
+    text.append(f"\nView on map: ", style="muted")
+    text.append(f"[link={maps_url}]Google Maps (with marker)[/link]", style="info")
     
     return text
 
@@ -794,34 +943,34 @@ _space_weather_cache: dict | None = None
 def format_flare_class(class_type: str) -> str:
     """Format flare class with color."""
     if not class_type:
-        return "[dim]Unknown[/dim]"
+        return "[muted]Unknown[/muted]"
     if class_type.startswith("X"):
-        return f"[bold red]{class_type}[/bold red]"
+        return f"[error]{class_type}[/error]"
     elif class_type.startswith("M"):
-        return f"[bold yellow]{class_type}[/bold yellow]"
+        return f"[warning]{class_type}[/warning]"
     elif class_type.startswith("C"):
-        return f"[bold cyan]{class_type}[/bold cyan]"
+        return f"[info]{class_type}[/info]"
     elif class_type.startswith("B"):
-        return f"[bold green]{class_type}[/bold green]"
+        return f"[success]{class_type}[/success]"
     return class_type
 
 
 def format_kp_index(kp: float) -> str:
     """Format Kp index with color based on storm level."""
     if kp >= 5:
-        return f"[bold red]{kp:.1f}[/bold red]"
+        return f"[error]{kp:.1f}[/error]"
     elif kp >= 4:
-        return f"[bold yellow]{kp:.1f}[/bold yellow]"
+        return f"[warning]{kp:.1f}[/warning]"
     elif kp >= 3:
-        return f"[bold cyan]{kp:.1f}[/bold cyan]"
-    return f"[green]{kp:.1f}[/green]"
+        return f"[info]{kp:.1f}[/info]"
+    return f"[success]{kp:.1f}[/success]"
 
 
 def create_space_weather_table(data: dict) -> Table:
     """Create table for space weather overview."""
-    table = Table(title="Space Weather Overview", show_header=True, header_style="bold cyan", expand=True)
-    table.add_column("Category", style="cyan", width=18, no_wrap=True)
-    table.add_column("Details", style="white")
+    table = Table(title="Space Weather Overview", show_header=True, header_style="title", expand=True, border_style="border")
+    table.add_column("Category", style="number", width=18, no_wrap=True)
+    table.add_column("Details", style="text")
     
     # Solar Flares
     flares = data.get("flares", [])
@@ -834,7 +983,7 @@ def create_space_weather_table(data: dict) -> Table:
             flare_text += f"{cls}  {peak}  AR{region}\n"
         table.add_row("Recent Flares", flare_text.strip())
     else:
-        table.add_row("Recent Flares", "[dim]No recent flares[/dim]")
+        table.add_row("Recent Flares", "[muted]No recent flares[/muted]")
     
     # CMEs
     cmes = data.get("cmes", [])
@@ -848,7 +997,7 @@ def create_space_weather_table(data: dict) -> Table:
             cme_text += f"{start}  {speed}\n"
         table.add_row("Recent CMEs", cme_text.strip())
     else:
-        table.add_row("Recent CMEs", "[dim]No recent CMEs[/dim]")
+        table.add_row("Recent CMEs", "[muted]No recent CMEs[/muted]")
     
     # Kp Index (current and max last 24h)
     kp_data = data.get("kp_index", [])
@@ -859,14 +1008,14 @@ def create_space_weather_table(data: dict) -> Table:
         table.add_row("Max Kp (24h)", format_kp_index(max_kp))
         # Storm level
         if max_kp >= 5:
-            storm = "[bold red]G1-G5 Storm[/bold red]"
+            storm = "[error]G1-G5 Storm[/error]"
         elif max_kp >= 4:
-            storm = "[bold yellow]G1 Minor Storm[/bold yellow]"
+            storm = "[warning]G1 Minor Storm[/warning]"
         else:
-            storm = "[green]Quiet[/green]"
+            storm = "[success]Quiet[/success]"
         table.add_row("Storm Level", storm)
     else:
-        table.add_row("Kp Index", "[dim]No data[/dim]")
+        table.add_row("Kp Index", "[muted]No data[/muted]")
     
     return table
 
@@ -874,7 +1023,7 @@ def create_space_weather_table(data: dict) -> Table:
 def show_space_weather():
     """Show space weather dashboard."""
     clear_screen()
-    console.print("[bold cyan]Fetching space weather data...[/bold cyan]\n")
+    console.print("[info]Fetching space weather data...[/info]\n")
     
     data = fetch_space_weather()
     if not data:
@@ -894,12 +1043,12 @@ def show_space_weather():
             key_lines = [l for l in lines if any(k in l.lower() for k in ["kp", "storm", "flare", "cme", "geomagnetic", "radiation", "g1", "g2", "g3", "g4", "g5"])]
             if key_lines:
                 forecast_text = Text()
-                forecast_text.append("3-Day Forecast Highlights:\n", style="bold cyan")
+                forecast_text.append("3-Day Forecast Highlights:\n", style="title")
                 for line in key_lines[:6]:
-                    forecast_text.append(f"  {line.strip()}\n", style="white")
-                console.print(Panel(forecast_text, title="NOAA SWPC Forecast", border_style="cyan"))
+                    forecast_text.append(f"  {line.strip()}\n", style="text")
+                console.print(Panel(forecast_text, title="NOAA SWPC Forecast", border_style="border"))
         
-        console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]r[/cyan] - Refresh  [cyan]Enter[/cyan] - Back")
+        console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Refresh  [info]Enter[/info] - Back")
         choice = input("> ").strip().lower()
         
         if not choice:
@@ -907,7 +1056,7 @@ def show_space_weather():
         if choice == "r":
             global _space_weather_cache
             _space_weather_cache = None
-            console.print("[dim]Refreshing...[/dim]")
+            console.print("[muted]Refreshing...[/muted]")
             time.sleep(1)
             return show_space_weather()
 
@@ -929,7 +1078,7 @@ CELESTRAK_TLE_URLS = {
 }
 
 
-def fetch_tle_data(group: str = "stations") -> list[dict]:
+def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list[dict]:
     """Fetch TLE data from Celestrak."""
     global _tle_cache
     cache_key = f"tle:{group}"
@@ -947,7 +1096,10 @@ def fetch_tle_data(group: str = "stations") -> list[dict]:
     
     url = CELESTRAK_TLE_URLS.get(group, CELESTRAK_TLE_URLS["stations"])
     try:
-        res = fetch_with_retry(url, timeout=15)
+        if show_progress:
+            res = fetch_with_progress(url, f"Fetching {group} TLE...", timeout=15)
+        else:
+            res = fetch_with_retry(url, timeout=15)
         if res and res.status_code == 200:
             lines = res.text.strip().split("\n")
             satellites = []
@@ -1375,9 +1527,6 @@ def get_rarity_bonus(name: str) -> float:
 def show_satellite_passes():
     """Show satellite passes menu and predictions."""
     from rich.prompt import Prompt
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich.text import Text
     
     # Get or set observer location
     lat = config.get("observer_lat")
@@ -1386,7 +1535,7 @@ def show_satellite_passes():
     
     if lat is None or lon is None:
         clear_screen()
-        console.print("[bold cyan]Satellite Passes - Set Your Location[/bold cyan]\n")
+        console.print("[title]Satellite Passes - Set Your Location[/title]\n")
         console.print("Enter your location for accurate pass predictions.\n")
         
         try:
@@ -1401,25 +1550,24 @@ def show_satellite_passes():
             config.set("observer_lat", lat)
             config.set("observer_lon", lon)
             config.set("observer_alt", alt)
-            console.print(f"\n[green]Location saved: {lat:.4f}, {lon:.4f}, {alt}m[/green]")
+            console.print(f"\n[success]Location saved: {lat:.4f}, {lon:.4f}, {alt}m[/success]")
             time.sleep(1)
         except Exception:
-            console.print("[red]Invalid coordinates[/red]")
+            console.print("[error]Invalid coordinates[/error]")
             time.sleep(1)
             return
     
     while True:
         clear_screen()
-        console.print(f"[bold cyan]Satellite Passes[/bold cyan] (Location: {lat:.4f}, {lon:.4f})\n")
-        console.print("  [bold white]1[/bold white] Predict passes (menu)")
-        console.print("  [bold white]2[/bold white] Tonight's best passes (quick)")
-        console.print("  [bold white]3[/bold white] Specific satellite")
-        console.print("  [bold white]4[/bold white] Change location")
-        console.print("  [bold white]5[/bold white] Back to main menu\n")
+        console.print(f"[title]Satellite Passes[/title] (Location: {lat:.4f}, {lon:.4f})\n")
+        console.print("  [number]1[/number] Predict passes (3 days)")
+        console.print("  [number]2[/number] Tonight's best passes (24h)")
+        console.print("  [number]3[/number] Specific satellite")
+        console.print("  [number]4[/number] Change location")
+        console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back to main menu")
+        choice = input("> ").strip()
         
-        choice = Prompt.ask("Select option", choices=["1", "2", "3", "4", "5"], default="2")
-        
-        if choice == "5":
+        if not choice:
             return
         elif choice == "4":
             config.set("observer_lat", None)
@@ -1430,7 +1578,7 @@ def show_satellite_passes():
         elif choice == "1":
             predict_passes(lat, lon, alt, days=3)
         elif choice == "2":
-            predict_passes(lat, lon, alt, days=1)  # Tonight only
+            predict_passes(lat, lon, alt, days=1)
         elif choice == "3":
             predict_specific_satellite(lat, lon, alt)
 
@@ -1441,17 +1589,16 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
     
     while True:
         clear_screen()
-        console.print("[bold cyan]Satellite Pass Predictions[/bold cyan]\n")
-        console.print("  [bold white]1[/bold white] All satellites (stations + Starlink) - next {} days".format(days))
-        console.print("  [bold white]2[/bold white] Tonight only (next 24 hours)")
-        console.print("  [bold white]3[/bold white] Stations only (ISS, Tiangong, Hubble, etc.)")
-        console.print("  [bold white]4[/bold white] Starlink only (quick mode: first 200)")
-        console.print("  [bold white]5[/bold white] Change days (currently {})".format(days))
-        console.print("  [bold white]6[/bold white] Back\n")
+        console.print("[title]Satellite Pass Predictions[/title]\n")
+        console.print("  [number]1[/number] All satellites (stations + Starlink) - {} days".format(days))
+        console.print("  [number]2[/number] Tonight only (24 hours)")
+        console.print("  [number]3[/number] Stations only (ISS, Tiangong, Hubble, etc.)")
+        console.print("  [number]4[/number] Starlink only (first 200)")
+        console.print("  [number]5[/number] Change days (currently {})".format(days))
+        console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
+        choice = input("> ").strip()
         
-        choice = Prompt.ask("Select option", choices=["1", "2", "3", "4", "5", "6"], default="1")
-        
-        if choice == "6":
+        if not choice:
             return
         elif choice == "5":
             try:
@@ -1459,6 +1606,8 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
                 days = max(1, min(7, days))
             except ValueError:
                 pass
+            continue
+        elif choice not in ("1", "2", "3", "4"):
             continue
         
         clear_screen()
@@ -1481,27 +1630,43 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
             limit = 200
             title = "Starlink Quick Mode (first 200, {} days)".format(days)
         
-        console.print("[bold cyan]Fetching TLE data...[/bold cyan]\n")
-        
-        all_satellites = []
-        for group in groups:
-            sats = fetch_tle_data(group)
-            if limit and len(sats) > limit:
-                sats = sats[:limit]
-            all_satellites.extend(sats)
+        if len(groups) > 1:
+            urls = [(CELESTRAK_TLE_URLS[g], g) for g in groups]
+            results = multi_fetch_with_progress(urls, "Fetching TLE data...")
+            all_satellites = []
+            for label, res in results:
+                if res and res.status_code == 200:
+                    lines = res.text.strip().split("\n")
+                    sats = []
+                    for i in range(0, len(lines), 3):
+                        if i + 2 < len(lines):
+                            name = lines[i].strip()
+                            line1 = lines[i + 1].strip()
+                            line2 = lines[i + 2].strip()
+                            if line1.startswith("1 ") and line2.startswith("2 "):
+                                sats.append({"name": name, "line1": line1, "line2": line2})
+                    if limit and len(sats) > limit:
+                        sats = sats[:limit]
+                    all_satellites.extend(sats)
+        else:
+            all_satellites = []
+            for group in groups:
+                sats = fetch_tle_data(group, show_progress=True)
+                if limit and len(sats) > limit:
+                    sats = sats[:limit]
+                all_satellites.extend(sats)
         
         if not all_satellites:
-            console.print("[bold red]Error: Could not fetch satellite data[/bold red]")
+            console.print("[error]Error: Could not fetch satellite data[/error]")
             input("\nPress Enter to return...")
             return
         
-        console.print(f"[green]Loaded {len(all_satellites)} satellites[/green]\n")
-        console.print("[dim]Calculating passes...[/dim]")
+        console.print(f"[success]Loaded {len(all_satellites)} satellites[/success]\n")
+        console.print("[muted]Calculating passes...[/muted]")
         
         passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
         
         if choice == "2":
-            # Filter to tonight only (next 24 hours)
             now = datetime.now(timezone.utc)
             cutoff = now + timedelta(hours=24)
             passes = [p for p in passes if p["start"] < cutoff]
@@ -1521,16 +1686,16 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
         sorted_sats = sorted(passes_by_sat.items(), key=lambda x: x[1][0]["start"])
         
         clear_screen()
-        console.print(f"[bold cyan]{title}[/bold cyan]")
+        console.print(f"[title]{title}[/title]")
         console.print(f"Location: {lat:.4f}, {lon:.4f}, {alt}m\n")
         
         total_passes = sum(len(v) for v in passes_by_sat.values())
-        console.print(f"[dim]{len(passes_by_sat)} satellites, {total_passes} total passes[/dim]\n")
+        console.print(f"[muted]{len(passes_by_sat)} satellites, {total_passes} total passes[/muted]\n")
         
         for name, sat_passes in sorted_sats:
             if not sat_passes:
                 continue
-            console.print(f"\n[bold white]{name}[/bold white]")
+            console.print(f"\n[highlight]{name}[/highlight]")
             for p in sat_passes[:5]:
                 start_str = p["start"].strftime("%m-%d %H:%M UTC")
                 end_str = p["end"].strftime("%H:%M")
@@ -1542,49 +1707,54 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
                 mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
                 qual_str = f"  Q{quality}" if quality > 0 else ""
                 visible = "✓" if p["visible"] else "✗"
-                color = "green" if p["visible"] else "dim"
+                color = "success" if p["visible"] else "muted"
                 console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}  {visible}[/{color}]")
         
-        console.print("\n  [bold white]r[/bold white] Recalculate  [bold white]b[/bold white] Back")
-        action = Prompt.ask("Action", choices=["r", "b"], default="b")
-        if action == "b":
-            continue
+        console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Recalculate  [info]Enter[/info] - Back")
+        action = input("> ").strip().lower()
+        if not action or action != "r":
+            return
         # If 'r', loop continues and recalculates
 
 
 def predict_specific_satellite(lat: float, lon: float, alt: float):
     """Predict passes for a specific satellite."""
     from rich.prompt import Prompt
-    from rich.table import Table
     
     while True:
         clear_screen()
-        console.print("[bold cyan]Specific Satellite Prediction[/bold cyan]\n")
+        console.print("[title]Specific Satellite Prediction[/title]\n")
         
         # Select satellite group
         console.print("Select satellite group:")
         groups = list(CELESTRAK_TLE_URLS.keys())
         for i, g in enumerate(groups, 1):
-            console.print(f"  [bold white]{i}[/bold white] {g.capitalize()}")
-        console.print(f"  [bold white]{len(groups)+1}[/bold white] Back\n")
+            console.print(f"  [number]{i}[/number] {g.capitalize()}")
+        console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
+        choice = input("> ").strip()
         
-        choice = Prompt.ask("Select group", choices=[str(i) for i in range(1, len(groups)+2)], default="1")
-        if int(choice) == len(groups) + 1:
+        if not choice:
             return
+        try:
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(groups):
+                continue
+        except ValueError:
+            continue
         
-        group = groups[int(choice) - 1]
+        group = groups[idx]
         
         # Fetch TLE data for selected group
         clear_screen()
-        console.print(f"[bold cyan]Fetching {group} TLE data...[/bold cyan]\n")
+        console.print(f"[info]Fetching {group} TLE data...[/info]\n")
         satellites = fetch_tle_data(group)
         
         if not satellites:
-            console.print("[bold red]Error: Could not fetch satellite data[/bold red]")
+            console.print("[error]Error: Could not fetch satellite data[/error]")
             input("\nPress Enter to return...")
             continue
         
-        console.print(f"[green]Loaded {len(satellites)} satellites from {group}[/green]\n")
+        console.print(f"[success]Loaded {len(satellites)} satellites from {group}[/success]\n")
         
         # Search/filter
         search = Prompt.ask("Search satellite name (or press Enter to list all)", default="").strip().lower()
@@ -1592,36 +1762,31 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
         filtered = [s for s in satellites if search in s["name"].lower()] if search else satellites
         
         if not filtered:
-            console.print("[yellow]No matches found[/yellow]")
+            console.print("[warning]No matches found[/warning]")
             time.sleep(1)
             continue
         
         # Show list with numbers
-        clear_screen()
-        console.print(f"[bold cyan]{group.capitalize()} Satellites[/bold cyan] ({len(filtered)} matches)\n")
-        
-        # Show in pages of 20
         page_size = 20
         total_pages = (len(filtered) + page_size - 1) // page_size
         page = 0
         
         while True:
             clear_screen()
-            console.print(f"[bold cyan]{group.capitalize()} Satellites[/bold cyan] (Page {page+1}/{total_pages})\n")
+            console.print(f"[title]{group.capitalize()} Satellites[/title] (Page {page+1}/{total_pages})\n")
             
             start = page * page_size
             end = min(start + page_size, len(filtered))
             
             for i in range(start, end):
                 sat = filtered[i]
-                console.print(f"  [bold white]{i+1}[/bold white] {sat['name']}")
+                console.print(f"  [number]{i+1}[/number] {sat['name']}")
             
-            console.print("\n  [bold white]n[/bold white] Next page  [bold white]p[/bold white] Previous  [bold white]s[/bold white] Search again  [bold white]b[/bold white] Back")
+            console.print("\n[warning]Actions:[/warning]  [info]n[/info] Next  [info]p[/info] Prev  [info]s[/info] Search  [info]Enter[/info] Back")
+            action = input("> ").strip().lower()
             
-            action = Prompt.ask("Select satellite number or action", choices=["n", "p", "s", "b"] + [str(i+1) for i in range(start, end)], default="b")
-            
-            if action == "b":
-                break
+            if not action:
+                break  # Back to group selection
             elif action == "s":
                 break  # Will re-prompt search
             elif action == "n" and page < total_pages - 1:
@@ -1632,32 +1797,32 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
                 continue
             else:
                 # Selected a satellite
-                idx = int(action) - 1
-                selected = filtered[idx]
-                show_satellite_detail(selected, lat, lon, alt)
-                break
+                try:
+                    idx = int(action) - 1
+                    if start <= idx < end:
+                        selected = filtered[idx]
+                        show_satellite_detail(selected, lat, lon, alt)
+                except ValueError:
+                    pass
         
         if action == "s":
             continue  # Re-search
-        elif action == "b":
-            continue  # Back to group selection
-        else:
-            return  # After showing detail, return to main menu
+        # If action is empty or "b", loop continues to group selection
 
 
 def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
     """Show detailed passes for a specific satellite."""
     clear_screen()
-    console.print(f"[bold cyan]Calculating passes for {sat['name']}...[/bold cyan]\n")
+    console.print(f"[info]Calculating passes for {sat['name']}...[/info]\n")
     
     passes = calculate_visible_passes([sat], lat, lon, alt, days=7)
     
     clear_screen()
-    console.print(f"[bold cyan]{sat['name']}[/bold cyan] - Next 7 Days\n")
+    console.print(f"[title]{sat['name']}[/title] - Next 7 Days\n")
     console.print(f"Location: {lat:.4f}, {lon:.4f}\n")
     
     if not passes:
-        console.print("[yellow]No visible passes in the next 7 days[/yellow]")
+        console.print("[warning]No visible passes in the next 7 days[/warning]")
     else:
         for p in passes[:10]:
             start_str = p["start"].strftime("%m-%d %H:%M UTC")
@@ -1670,10 +1835,11 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
             mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
             qual_str = f"  Q{quality}" if quality > 0 else ""
             visible = "✓" if p["visible"] else "✗"
-            color = "green" if p["visible"] else "dim"
+            color = "success" if p["visible"] else "muted"
             console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}  {visible}[/{color}]")
     
-    input("\nPress Enter to return...")
+    console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
+    input("> ")
 
 
 def format_launch_datetime(iso_str: str) -> str:
@@ -1730,12 +1896,12 @@ def format_launch_status(status: dict) -> str:
 
 def create_launches_table(launches: list[dict]) -> Table:
     """Create table for launches list - compact single-line format."""
-    table = Table(title="Upcoming Launches", show_header=True, header_style="bold cyan", expand=True)
-    table.add_column("#", style="cyan", justify="right", width=4, no_wrap=True)
-    table.add_column("Mission", style="bold white", min_width=40, overflow="fold")
-    table.add_column("Rocket / Provider", style="green", min_width=25, overflow="fold")
-    table.add_column("Date (UTC)", style="white", width=18, no_wrap=True)
-    table.add_column("Status", style="white", width=12, no_wrap=True)
+    table = Table(title="Upcoming Launches", show_header=True, header_style="title", expand=True, border_style="border")
+    table.add_column("#", style="number", justify="right", width=4, no_wrap=True)
+    table.add_column("Mission", style="name", min_width=40, overflow="fold")
+    table.add_column("Rocket / Provider", style="rocket", min_width=25, overflow="fold")
+    table.add_column("Date (UTC)", style="date", width=18, no_wrap=True)
+    table.add_column("Status", style="status", width=12, no_wrap=True)
 
     for idx, launch in enumerate(launches, 1):
         mission = launch.get("name", "Unknown")
@@ -1774,19 +1940,19 @@ def create_launches_panel_list(launches: list[dict]) -> list:
 
         # Color based on status
         if status_id == 1:
-            status_style = "bold green"
+            status_style = "success"
         elif status_id == 2:
-            status_style = "bold yellow"
+            status_style = "warning"
         elif status_id == 3:
-            status_style = "bold red"
+            status_style = "error"
         else:
-            status_style = "dim"
+            status_style = "muted"
 
         text = Text()
-        text.append(f"{idx}. ", style="bold cyan")
-        text.append(f"{mission}\n", style="bold white")
-        text.append(f"    {rocket} / {provider}\n", style="green")
-        text.append(f"    {window_start}  ", style="white")
+        text.append(f"{idx}. ", style="number")
+        text.append(f"{mission}\n", style="name")
+        text.append(f"    {rocket} / {provider}\n", style="rocket")
+        text.append(f"    {window_start}  ", style="date")
         if countdown:
             countdown_text = Text.from_markup(countdown)
             text.append(" ")
@@ -1794,16 +1960,16 @@ def create_launches_panel_list(launches: list[dict]) -> list:
             text.append("  ")
         text.append(f"[{status}]", style=status_style)
 
-        panels.append(Panel(text, border_style="dim", padding=(0, 1)))
+        panels.append(Panel(text, border_style="border", padding=(0, 1)))
 
     return panels
 
 
 def create_launch_detail_table(launch: dict) -> Table:
     """Create detailed table for a single launch."""
-    table = Table(title=f"Launch Details: {launch.get('name', 'Unknown')}", show_header=True, expand=True)
-    table.add_column("Property", style="cyan", width=22, no_wrap=True)
-    table.add_column("Value", style="white")
+    table = Table(title=f"Launch Details: {launch.get('name', 'Unknown')}", show_header=True, expand=True, border_style="border")
+    table.add_column("Property", style="number", width=22, no_wrap=True)
+    table.add_column("Value", style="text")
 
     # Basic info
     table.add_row("Mission", launch.get("name", "N/A"))
@@ -1872,11 +2038,11 @@ def create_launch_detail_table(launch: dict) -> Table:
 def show_launches_list():
     """Show list of upcoming launches."""
     clear_screen()
-    console.print("[bold cyan]Fetching upcoming launches...[/bold cyan]\n")
+    console.print("[info]Fetching upcoming launches...[/info]\n")
 
     launches = fetch_launches()
     if not launches:
-        console.print("[bold red]Error: Could not fetch launches data[/bold red]")
+        console.print("[error]Error: Could not fetch launches data[/error]")
         input("\nPress Enter to return to menu...")
         return
 
@@ -1885,7 +2051,7 @@ def show_launches_list():
         panels = create_launches_panel_list(launches)
         for panel in panels:
             console.print(panel)
-        console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]1-{n}[/cyan] - Details  [cyan]r[/cyan] - Refresh  [cyan]Enter[/cyan] - Back".format(n=len(launches)))
+        console.print("\n[warning]Actions:[/warning]  [info]1-{n}[/info] - Details  [info]r[/info] - Refresh  [info]Enter[/info] - Back".format(n=len(launches)))
         choice = input("> ").strip().lower()
 
         if not choice:
@@ -1893,7 +2059,7 @@ def show_launches_list():
         if choice == "r":
             global _launches_cache
             _launches_cache = None
-            console.print("[dim]Refreshing...[/dim]")
+            console.print("[muted]Refreshing...[/muted]")
             time.sleep(1)
             return show_launches_list()
         if choice.isdigit():
@@ -1908,55 +2074,86 @@ def show_launch_detail(launch: dict):
         clear_screen()
         console.print(create_launch_detail_table(launch))
 
-        console.print("\n[bold yellow]Actions:[/bold yellow]  [cyan]w[/cyan] - Open webcast  [cyan]Enter[/cyan] - Back")
+        console.print("\n[warning]Actions:[/warning]  [info]w[/info] - Open webcast  [info]Enter[/info] - Back")
         choice = input("> ").strip().lower()
 
         if choice == "w" and launch.get("webcast_live") and launch.get("streams"):
             url = launch["streams"][0].get("url", "")
             if url:
                 webbrowser.open(url)
-                console.print("[green]Opened webcast in browser[/green]")
+                console.print("[success]Opened webcast in browser[/success]")
                 time.sleep(1)
         else:
             return
 
 
 def show_main_menu():
-    """Show main menu with 6 options."""
+    """Show main menu with 7 options."""
     from rich.align import Align
     from rich.panel import Panel
     from rich.text import Text
-
+    
+    current_theme = config.get("theme", "default")
     menu_text = Text()
-    menu_text.append("         SPACECREW", style="bold white")
+    menu_text.append("         SPACECREW", style="highlight")
     menu_text.append("\n\n")
-    menu_text.append("  1 ", style="bold white")
-    menu_text.append("People in Space", style="cyan")
+    menu_text.append("  1 ", style="number")
+    menu_text.append("People in Space", style="info")
     menu_text.append("\n")
-    menu_text.append("  2 ", style="bold white")
-    menu_text.append("NASA APOD", style="cyan")
+    menu_text.append("  2 ", style="number")
+    menu_text.append("NASA APOD", style="info")
     menu_text.append("\n")
-    menu_text.append("  3 ", style="bold white")
-    menu_text.append("Upcoming Launches", style="cyan")
+    menu_text.append("  3 ", style="number")
+    menu_text.append("Upcoming Launches", style="info")
     menu_text.append("\n")
-    menu_text.append("  4 ", style="bold white")
-    menu_text.append("ISS Position", style="cyan")
+    menu_text.append("  4 ", style="number")
+    menu_text.append("ISS Position", style="info")
     menu_text.append("\n")
-    menu_text.append("  5 ", style="bold white")
-    menu_text.append("Space Weather", style="cyan")
+    menu_text.append("  5 ", style="number")
+    menu_text.append("Space Weather", style="info")
     menu_text.append("\n")
-    menu_text.append("  6 ", style="bold white")
-    menu_text.append("Satellite Passes", style="cyan")
+    menu_text.append("  6 ", style="number")
+    menu_text.append("Satellite Passes", style="info")
     menu_text.append("\n")
-    menu_text.append("  7 ", style="bold white")
-    menu_text.append("Exit", style="cyan")
-
+    menu_text.append("  7 ", style="number")
+    menu_text.append(f"Theme ({current_theme})", style="info")
+    menu_text.append("\n")
+    menu_text.append("  8 ", style="number")
+    menu_text.append("Exit", style="info")
+    
     panel = Panel(
         Align.center(menu_text),
-        border_style="white",
+        border_style="border",
         title_align="center",
     )
     console.print(panel)
+
+
+def show_theme_menu():
+    """Show theme selection menu."""
+    from rich.prompt import Prompt
+    
+    themes = list(THEMES.keys())
+    current = config.get("theme", "default")
+    
+    while True:
+        clear_screen()
+        console.print("[title]Select Theme[/title]\n")
+        for i, t in enumerate(themes, 1):
+            marker = " ← current" if t == current else ""
+            console.print(f"  [number]{i}[/number] {t.capitalize()}{marker}")
+        console.print(f"  [number]{len(themes)+1}[/number] Back\n")
+        
+        choice = Prompt.ask("Select theme", choices=[str(i) for i in range(1, len(themes)+2)], default=str(themes.index(current)+1))
+        
+        if int(choice) == len(themes) + 1:
+            return
+        
+        new_theme = themes[int(choice) - 1]
+        config.set("theme", new_theme)
+        console.print(f"[success]Theme changed to {new_theme}[/success]")
+        time.sleep(0.5)
+        return
 
 
 def handle_people_in_space():
@@ -1965,7 +2162,7 @@ def handle_people_in_space():
     people = fetch_space_data()
 
     if people is None:
-        console.print("[bold red]Error: No internet connection. Please check your network and try again.[/bold red]")
+        console.print("[error]Error: No internet connection. Please check your network and try again.[/error]")
         input("\nPress Enter to return to menu...")
         return
 
@@ -1973,7 +2170,7 @@ def handle_people_in_space():
     tree, missions = build_tree_menu(len(people), iss_groups, tiangong_groups)
 
     console.print(tree)
-    console.print("\n[bold yellow]Commands:[/bold yellow] [cyan]menu[/cyan] - Back  [cyan]quit[/cyan] - Exit")
+    console.print("\n[warning]Commands:[/warning] [info]menu[/info] - Back  [info]quit[/info] - Exit")
     choice = input("\n> ").strip().lower()
 
     if choice == "quit":
@@ -2053,9 +2250,9 @@ def main():
         clear_screen()
         show_main_menu()
         console.print()
-        choice = console.input("[bold cyan]Select option [1-7]: [/bold cyan]").strip().lower()
-
-        if choice in ("7", "quit", "exit", "q"):
+        choice = console.input("[bold cyan]Select option [1-8]: [/bold cyan]").strip().lower()
+        
+        if choice in ("8", "quit", "exit", "q"):
             break
         elif choice == "1":
             result = handle_people_in_space()
@@ -2071,6 +2268,8 @@ def main():
             show_space_weather()
         elif choice == "6":
             show_satellite_passes()
+        elif choice == "7":
+            show_theme_menu()
         else:
             console.print("[red]Invalid option[/red]")
             time.sleep(1)
