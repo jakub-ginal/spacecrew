@@ -26,107 +26,161 @@ from rich.theme import Theme
 from rich.tree import Tree
 
 THEMES = {
-    "default": Theme({
-        "info": "cyan",
-        "warning": "yellow",
-        "error": "bold red",
-        "success": "green",
-        "muted": "dim",
-        "highlight": "bold white",
-        "title": "bold cyan",
-        "border": "white",
-        "text": "white",
-        "number": "cyan",
-        "name": "bold white",
-        "country": "green",
-        "rocket": "green",
-        "provider": "green",
-        "date": "white",
-        "status": "white",
+    "catppuccin-mocha": Theme({
+        "info": "#89b4fa",
+        "warning": "#f9e2af",
+        "error": "#f38ba8",
+        "success": "#a6e3a1",
+        "muted": "#6c7086",
+        "highlight": "#cdd6f4",
+        "title": "#cba6f7",
+        "border": "#313244",
+        "text": "#cdd6f4",
+        "number": "#89b4fa",
+        "name": "#cdd6f4",
+        "country": "#a6e3a1",
+        "rocket": "#fab387",
+        "provider": "#f5c2e7",
+        "date": "#bac2de",
+        "status": "#94e2d5",
     }),
-    "dark": Theme({
-        "info": "bright_cyan",
-        "warning": "bright_yellow",
-        "error": "bold bright_red",
-        "success": "bright_green",
-        "muted": "dim",
-        "highlight": "bold bright_white",
-        "title": "bold bright_cyan",
-        "border": "bright_white",
-        "text": "bright_white",
-        "number": "bright_cyan",
-        "name": "bold bright_white",
-        "country": "bright_green",
-        "rocket": "bright_green",
-        "provider": "bright_green",
-        "date": "bright_white",
-        "status": "bright_white",
+    "tokyo-night": Theme({
+        "info": "#7aa2f7",
+        "warning": "#e0af68",
+        "error": "#f7768e",
+        "success": "#9ece6a",
+        "muted": "#565f89",
+        "highlight": "#c0caf5",
+        "title": "#bb9af7",
+        "border": "#292e42",
+        "text": "#c0caf5",
+        "number": "#7aa2f7",
+        "name": "#c0caf5",
+        "country": "#9ece6a",
+        "rocket": "#ff9e64",
+        "provider": "#c0caf5",
+        "date": "#a9b1d6",
+        "status": "#73daca",
     }),
-    "solarized": Theme({
-        "info": "#268bd2",
-        "warning": "#b58900",
-        "error": "#dc322f",
-        "success": "#859900",
-        "muted": "#657b83",
-        "highlight": "#eee8d5",
-        "title": "#268bd2",
-        "border": "#93a1a1",
-        "text": "#eee8d5",
-        "number": "#268bd2",
-        "name": "#eee8d5",
-        "country": "#859900",
-        "rocket": "#859900",
-        "provider": "#859900",
-        "date": "#eee8d5",
-        "status": "#eee8d5",
+    "gruvbox": Theme({
+        "info": "#83a598",
+        "warning": "#fabd2f",
+        "error": "#fb4934",
+        "success": "#b8bb26",
+        "muted": "#928374",
+        "highlight": "#ebdbb2",
+        "title": "#d3869b",
+        "border": "#3c3836",
+        "text": "#ebdbb2",
+        "number": "#83a598",
+        "name": "#ebdbb2",
+        "country": "#b8bb26",
+        "rocket": "#fe8019",
+        "provider": "#d3869b",
+        "date": "#a89984",
+        "status": "#8ec07c",
     }),
-    "dracula": Theme({
-        "info": "#8be9fd",
-        "warning": "#f1fa8c",
-        "error": "#ff5555",
-        "success": "#50fa7b",
-        "muted": "#6272a4",
-        "highlight": "#f8f8f2",
-        "title": "#bd93f9",
-        "border": "#ff79c6",
-        "text": "#f8f8f2",
-        "number": "#8be9fd",
-        "name": "#f8f8f2",
-        "country": "#50fa7b",
-        "rocket": "#50fa7b",
-        "provider": "#50fa7b",
-        "date": "#f8f8f2",
-        "status": "#f8f8f2",
+    "nord": Theme({
+        "info": "#88c0d0",
+        "warning": "#ebcb8b",
+        "error": "#bf616a",
+        "success": "#a3be8c",
+        "muted": "#4c566a",
+        "highlight": "#eceff4",
+        "title": "#b48ead",
+        "border": "#3b4252",
+        "text": "#eceff4",
+        "number": "#88c0d0",
+        "name": "#eceff4",
+        "country": "#a3be8c",
+        "rocket": "#d08770",
+        "provider": "#81a1c1",
+        "date": "#d8dee9",
+        "status": "#8fbcbb",
     }),
-    "monokai": Theme({
-        "info": "#66d9ef",
-        "warning": "#e6db74",
-        "error": "#f92672",
-        "success": "#a6e22e",
-        "muted": "#75715e",
-        "highlight": "#f8f8f2",
-        "title": "#ae81ff",
-        "border": "#f92672",
-        "text": "#f8f8f2",
-        "number": "#66d9ef",
-        "name": "#f8f8f2",
-        "country": "#a6e22e",
-        "rocket": "#a6e22e",
-        "provider": "#a6e22e",
-        "date": "#f8f8f2",
-        "status": "#f8f8f2",
+    "everforest": Theme({
+        "info": "#7fbbb3",
+        "warning": "#dbbc7f",
+        "error": "#e67e80",
+        "success": "#a7c080",
+        "muted": "#7a8478",
+        "highlight": "#d3c6aa",
+        "title": "#d699b6",
+        "border": "#3a3f3b",
+        "text": "#d3c6aa",
+        "number": "#7fbbb3",
+        "name": "#d3c6aa",
+        "country": "#a7c080",
+        "rocket": "#e69875",
+        "provider": "#d699b6",
+        "date": "#a7c080",
+        "status": "#83c092",
+    }),
+    "rose-pine": Theme({
+        "info": "#9ccfd8",
+        "warning": "#f6c177",
+        "error": "#eb6f92",
+        "success": "#31748f",
+        "muted": "#6e6a86",
+        "highlight": "#e0def4",
+        "title": "#c4a7e7",
+        "border": "#26233a",
+        "text": "#e0def4",
+        "number": "#9ccfd8",
+        "name": "#e0def4",
+        "country": "#31748f",
+        "rocket": "#f6c177",
+        "provider": "#ebbcba",
+        "date": "#908caa",
+        "status": "#9ccfd8",
+    }),
+    "kanagawa": Theme({
+        "info": "#7fb4ca",
+        "warning": "#c0a36e",
+        "error": "#c34043",
+        "success": "#76946a",
+        "muted": "#727169",
+        "highlight": "#dcd7ba",
+        "title": "#957fb8",
+        "border": "#363646",
+        "text": "#dcd7ba",
+        "number": "#7fb4ca",
+        "name": "#dcd7ba",
+        "country": "#76946a",
+        "rocket": "#ffa066",
+        "provider": "#957fb8",
+        "date": "#c8c093",
+        "status": "#6a9589",
+    }),
+    "catppuccin-latte": Theme({
+        "info": "#1e66f5",
+        "warning": "#df8e1d",
+        "error": "#d20f39",
+        "success": "#40a02b",
+        "muted": "#7287fd",
+        "highlight": "#4c4f69",
+        "title": "#8839ef",
+        "border": "#ccd0da",
+        "text": "#4c4f69",
+        "number": "#1e66f5",
+        "name": "#4c4f69",
+        "country": "#40a02b",
+        "rocket": "#fe640b",
+        "provider": "#8839ef",
+        "date": "#5c5f77",
+        "status": "#179299",
     }),
 }
 
-def get_console(theme_name: str = "default") -> Console:
-    return Console(theme=THEMES.get(theme_name, THEMES["default"]))
+def get_console(theme_name: str = "catppuccin-mocha") -> Console:
+    return Console(theme=THEMES.get(theme_name, THEMES["catppuccin-mocha"]))
 
 console = get_console()
 
 
 def refresh_console():
     global console
-    console = get_console(config.get("theme", "default"))
+    console = get_console(config.get("theme", "catppuccin-mocha"))
 
 
 def fetch_with_progress(url: str, description: str = "Fetching...", **kwargs):
@@ -182,7 +236,7 @@ class Config:
     DEFAULTS = {
         "nasa_api_key": "",
         "cache_ttl_days": 30,
-        "theme": "default",
+        "theme": "catppuccin-mocha",
         "show_iss_position": True,
         "default_mode": "menu",
         "observer_lat": None,
@@ -2087,38 +2141,246 @@ def show_launch_detail(launch: dict):
             return
 
 
+def show_dashboard():
+    """Show stunning btop-like dashboard with all space data."""
+    from rich.layout import Layout
+    from rich.live import Live
+    from rich.align import Align
+    from datetime import datetime, timezone
+    
+    # Get observer location
+    lat = config.get("observer_lat")
+    lon = config.get("observer_lon")
+    alt = config.get("observer_alt", 0)
+    
+    if lat is None or lon is None:
+        clear_screen()
+        console.print("[warning]Set your location first in Satellite Passes → Change location[/warning]")
+        input("\nPress Enter to return...")
+        return
+    
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="main"),
+        Layout(name="footer", size=3),
+    )
+    layout["main"].split_row(
+        Layout(name="left", ratio=2),
+        Layout(name="right", ratio=1),
+    )
+    layout["left"].split_column(
+        Layout(name="iss", ratio=1),
+        Layout(name="tiangong", ratio=1),
+        Layout(name="passes", ratio=2),
+    )
+    layout["right"].split_column(
+        Layout(name="weather", ratio=1),
+        Layout(name="people", ratio=1),
+        Layout(name="launches", ratio=1),
+        Layout(name="apod", ratio=1),
+    )
+    
+    def build_dashboard():
+        now = datetime.now(timezone.utc)
+        
+        # Header
+        header_text = Text()
+        header_text.append(" ╭─────────────────────────────────────────────────────────────────╮ ", style="border")
+        header_text.append("\n")
+        header_text.append(" │  ", style="border")
+        header_text.append("SPACECREW DASHBOARD", style="highlight")
+        header_text.append("  │  ", style="border")
+        header_text.append(f" {now.strftime('%Y-%m-%d %H:%M:%S UTC')}  ", style="muted")
+        header_text.append(" │ ", style="border")
+        header_text.append("\n")
+        header_text.append(" ╰─────────────────────────────────────────────────────────────────╯ ", style="border")
+        layout["header"].update(Align.center(header_text))
+        
+        # ISS Panel
+        iss_data = fetch_iss_position()
+        if iss_data and iss_data.get("iss_position"):
+            pos = iss_data["iss_position"]
+            iss_text = Text()
+            iss_text.append(" 🛰️  ISS (ZARYA)\n", style="title")
+            iss_text.append(f"   Lat: {pos.get('latitude', 'N/A')}\n", style="text")
+            iss_text.append(f"   Lon: {pos.get('longitude', 'N/A')}\n", style="text")
+            iss_text.append(f"   Alt: {iss_data.get('altitude', 'N/A')} km\n", style="text")
+            iss_text.append(f"   Vel: {iss_data.get('velocity', 'N/A')} km/h\n", style="text")
+            iss_text.append(f"   Vis: {iss_data.get('visibility', 'N/A')}\n", style="text")
+            iss_text.append(f"   Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
+            layout["iss"].update(Panel(iss_text, title="[info]ISS[/info]", border_style="border", padding=(0, 1)))
+        else:
+            layout["iss"].update(Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="border"))
+        
+        # Tiangong Panel
+        tg_data = fetch_iss_position()  # Using same API for now
+        if tg_data and tg_data.get("iss_position"):
+            pos = tg_data["iss_position"]
+            tg_text = Text()
+            tg_text.append(" 🛰️  TIANGONG\n", style="title")
+            tg_text.append(f"   Lat: {pos.get('latitude', 'N/A')}\n", style="text")
+            tg_text.append(f"   Lon: {pos.get('longitude', 'N/A')}\n", style="text")
+            tg_text.append(f"   Alt: {tg_data.get('altitude', 'N/A')} km\n", style="text")
+            tg_text.append(f"   Vel: {tg_data.get('velocity', 'N/A')} km/h\n", style="text")
+            tg_text.append(f"   Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
+            layout["tiangong"].update(Panel(tg_text, title="[info]Tiangong[/info]", border_style="border", padding=(0, 1)))
+        else:
+            layout["tiangong"].update(Panel("[error]Tiangong data unavailable[/error]", title="[info]Tiangong[/info]", border_style="border"))
+        
+        # Next passes (top 5)
+        passes_text = Text()
+        passes_text.append(" 📡  NEXT PASSES (24h)\n", style="title")
+        try:
+            stations = fetch_tle_data("stations")
+            iss_sats = [s for s in stations if "ISS" in s["name"] or "ZARYA" in s["name"] or "NAUKA" in s["name"]]
+            tg_sats = [s for s in stations if "TIANGONG" in s["name"] or "CSS" in s["name"]]
+            key_sats = iss_sats + tg_sats
+            if key_sats:
+                passes = calculate_visible_passes(key_sats, lat, lon, alt, days=1)
+                now_utc = datetime.now(timezone.utc)
+                cutoff = now_utc + timedelta(hours=24)
+                passes = [p for p in passes if p["start"] < cutoff]
+                passes.sort(key=lambda x: x["start"])
+                for p in passes[:5]:
+                    start_str = p["start"].strftime("%m-%d %H:%M UTC")
+                    mag = p.get("magnitude", 99)
+                    q = p.get("quality", 0)
+                    mag_str = f" mag {mag:.1f}" if mag < 99 else ""
+                    passes_text.append(f"   {p['name'][:20]:20s} {start_str}  max {p['max_elevation']:.0f}°{mag_str}  Q{q}\n", style="text")
+            else:
+                passes_text.append("   No satellite data\n", style="muted")
+        except Exception:
+            passes_text.append("   Error calculating passes\n", style="error")
+        layout["passes"].update(Panel(passes_text, title="[info]Passes[/info]", border_style="border", padding=(0, 1)))
+        
+        # Space Weather
+        weather_data = fetch_space_weather()
+        weather_text = Text()
+        weather_text.append(" ☀️  SPACE WEATHER\n", style="title")
+        if weather_data:
+            flares = weather_data.get("flares", [])
+            if flares:
+                for f in flares[:2]:
+                    cls = f.get("classType", "N/A")
+                    peak = f.get("peakTime", "").replace("T", " ").replace("Z", " UTC")
+                    weather_text.append(f"   {cls}  {peak}\n", style="text")
+            kp = weather_data.get("kp_index", [])
+            if kp:
+                current_kp = kp[-1].get("kp_index", 0) if kp else 0
+                max_kp = max((d.get("kp_index", 0) for d in kp), default=0)
+                weather_text.append(f"   Kp: {current_kp:.1f}  (max {max_kp:.1f})\n", style="text")
+            weather_text.append(f"   Storm: {weather_data.get('storm_level', 'Quiet')}", style="text")
+        else:
+            weather_text.append("   No data", style="muted")
+        layout["weather"].update(Panel(weather_text, title="[info]Weather[/info]", border_style="border", padding=(0, 1)))
+        
+        # People in Space
+        people_data = fetch_space_data()
+        people_text = Text()
+        people_text.append(" 👨‍🚀  PEOPLE IN SPACE\n", style="title")
+        if people_data:
+            iss_groups, tg_groups = group_people_by_station(people_data)
+            people_text.append(f"   ISS: {sum(len(g) for g in iss_groups.values())}  ", style="text")
+            people_text.append(f"Tiangong: {sum(len(g) for g in tg_groups.values())}\n", style="text")
+            total = len(people_data)
+            people_text.append(f"   Total: {total}", style="highlight")
+        else:
+            people_text.append("   No data", style="muted")
+        layout["people"].update(Panel(people_text, title="[info]People[/info]", border_style="border", padding=(0, 1)))
+        
+        # Upcoming Launches
+        launches_data = fetch_launches()
+        launches_text = Text()
+        launches_text.append(" 🚀  NEXT LAUNCHES\n", style="title")
+        if launches_data:
+            for i, launch in enumerate(launches_data[:3]):
+                name = launch.get("name", "Unknown")[:25]
+                window = format_launch_datetime(launch.get("window_start", ""))
+                status = launch.get("status", {}).get("name", "Unknown")
+                countdown = get_launch_countdown(launch.get("window_start", ""))
+                launches_text.append(f"   {name}\n", style="text")
+                launches_text.append(f"   {window}  {countdown}\n", style="muted")
+                launches_text.append(f"   {status}\n\n", style="text")
+        else:
+            launches_text.append("   No data", style="muted")
+        layout["launches"].update(Panel(launches_text, title="[info]Launches[/info]", border_style="border", padding=(0, 1)))
+        
+        # APOD
+        apod_data = fetch_apod_date(None)
+        apod_text = Text()
+        apod_text.append(" 🖼️  APOD TODAY\n", style="title")
+        if apod_data:
+            title = apod_data.get("title", "Unknown")[:40]
+            date = apod_data.get("date", "Unknown")
+            apod_text.append(f"   {title}\n", style="text")
+            apod_text.append(f"   {date}", style="muted")
+        else:
+            apod_text.append("   No data", style="muted")
+        layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="border", padding=(0, 1)))
+        
+        # Footer
+        footer_text = Text()
+        footer_text.append("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  •  Auto-refresh: 2 min  •  ", style="info")
+        footer_text.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
+        layout["footer"].update(Align.center(footer_text))
+        
+        return layout
+    
+    # Initial build
+    layout = build_dashboard()
+    
+    # Live display with 2-minute auto-refresh
+    with Live(layout, console=console, refresh_per_second=1/120, screen=True) as live:
+        last_refresh = time.time()
+        while True:
+            try:
+                if time.time() - last_refresh > 120:  # 2 minutes
+                    layout = build_dashboard()
+                    live.update(layout)
+                    last_refresh = time.time()
+                time.sleep(1)
+            except KeyboardInterrupt:
+                break
+    
+    clear_screen()
+
+
 def show_main_menu():
-    """Show main menu with 7 options."""
+    """Show main menu with 8 options."""
     from rich.align import Align
     from rich.panel import Panel
     from rich.text import Text
     
-    current_theme = config.get("theme", "default")
+    current_theme = config.get("theme", "catppuccin-mocha")
     menu_text = Text()
     menu_text.append("         SPACECREW", style="highlight")
     menu_text.append("\n\n")
     menu_text.append("  1 ", style="number")
-    menu_text.append("People in Space", style="info")
+    menu_text.append("Dashboard", style="info")
     menu_text.append("\n")
     menu_text.append("  2 ", style="number")
-    menu_text.append("NASA APOD", style="info")
+    menu_text.append("People in Space", style="info")
     menu_text.append("\n")
     menu_text.append("  3 ", style="number")
-    menu_text.append("Upcoming Launches", style="info")
+    menu_text.append("NASA APOD", style="info")
     menu_text.append("\n")
     menu_text.append("  4 ", style="number")
-    menu_text.append("ISS Position", style="info")
+    menu_text.append("Upcoming Launches", style="info")
     menu_text.append("\n")
     menu_text.append("  5 ", style="number")
-    menu_text.append("Space Weather", style="info")
+    menu_text.append("ISS Position", style="info")
     menu_text.append("\n")
     menu_text.append("  6 ", style="number")
-    menu_text.append("Satellite Passes", style="info")
+    menu_text.append("Space Weather", style="info")
     menu_text.append("\n")
     menu_text.append("  7 ", style="number")
-    menu_text.append(f"Theme ({current_theme})", style="info")
+    menu_text.append("Satellite Passes", style="info")
     menu_text.append("\n")
     menu_text.append("  8 ", style="number")
+    menu_text.append(f"Theme ({current_theme})", style="info")
+    menu_text.append("\n")
+    menu_text.append("  9 ", style="number")
     menu_text.append("Exit", style="info")
     
     panel = Panel(
@@ -2134,17 +2396,20 @@ def show_theme_menu():
     from rich.prompt import Prompt
     
     themes = list(THEMES.keys())
-    current = config.get("theme", "default")
+    current = config.get("theme", "catppuccin-mocha")
+    if current not in themes:
+        current = "catppuccin-mocha"
     
     while True:
         clear_screen()
         console.print("[title]Select Theme[/title]\n")
         for i, t in enumerate(themes, 1):
             marker = " ← current" if t == current else ""
-            console.print(f"  [number]{i}[/number] {t.capitalize()}{marker}")
+            console.print(f"  [number]{i}[/number] {t.replace('-', ' ').title()}{marker}")
         console.print(f"  [number]{len(themes)+1}[/number] Back\n")
         
-        choice = Prompt.ask("Select theme", choices=[str(i) for i in range(1, len(themes)+2)], default=str(themes.index(current)+1))
+        default_idx = themes.index(current) + 1
+        choice = Prompt.ask("Select theme", choices=[str(i) for i in range(1, len(themes)+2)], default=str(default_idx))
         
         if int(choice) == len(themes) + 1:
             return
@@ -2201,7 +2466,7 @@ def parse_args():
     )
     parser.add_argument(
         "--mode",
-        choices=["people", "apod", "launches", "iss", "weather", "passes"],
+        choices=["dashboard", "people", "apod", "launches", "iss", "weather", "passes"],
         help="Start directly in a specific mode",
     )
     parser.add_argument(
@@ -2232,7 +2497,9 @@ def main():
     
     # Direct mode handling
     if args.mode:
-        if args.mode == "people":
+        if args.mode == "dashboard":
+            show_dashboard()
+        elif args.mode == "people":
             handle_people_in_space()
         elif args.mode == "apod":
             show_apod_view()
@@ -2250,28 +2517,30 @@ def main():
         clear_screen()
         show_main_menu()
         console.print()
-        choice = console.input("[bold cyan]Select option [1-8]: [/bold cyan]").strip().lower()
+        choice = console.input("[bold cyan]Select option [1-9]: [/bold cyan]").strip().lower()
         
-        if choice in ("8", "quit", "exit", "q"):
+        if choice in ("9", "quit", "exit", "q"):
             break
         elif choice == "1":
+            show_dashboard()
+        elif choice == "2":
             result = handle_people_in_space()
             if result == "quit":
                 break
-        elif choice == "2":
-            show_apod_view()
         elif choice == "3":
-            show_launches_list()
+            show_apod_view()
         elif choice == "4":
-            show_iss_position()
+            show_launches_list()
         elif choice == "5":
-            show_space_weather()
+            show_iss_position()
         elif choice == "6":
-            show_satellite_passes()
+            show_space_weather()
         elif choice == "7":
+            show_satellite_passes()
+        elif choice == "8":
             show_theme_menu()
         else:
-            console.print("[red]Invalid option[/red]")
+            console.print("[error]Invalid option[/error]")
             time.sleep(1)
 
 
