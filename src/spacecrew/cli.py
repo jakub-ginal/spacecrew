@@ -530,7 +530,7 @@ def calculate_space_experience(launched_timestamp, previous_days):
 
 
 def create_profile_table(person):
-    table = Table(title=f"Profile: {person.get('name')}", border_style="border")
+    table = Table(title=f"Profile: {person.get('name')}", border_style="white")
     table.add_column("Property", style="number")
     table.add_column("Value", style="text", max_width=40)
 
@@ -676,7 +676,7 @@ def show_apod_view(target_date: str | None = None):
         info_text.append(f"\nExplanation:\n", style="title")
         info_text.append(explanation, style="text")
 
-        info_panel = Panel(info_text, title="APOD Info", expand=False, border_style="border")
+        info_panel = Panel(info_text, title="APOD Info", expand=False, border_style="white")
 
         console.print(Columns([photo_panel, info_panel]))
 
@@ -718,7 +718,7 @@ def show_iss_position():
         return
     
     from rich.panel import Panel
-    console.print(Panel(format_iss_position(data), title="ISS Tracker", border_style="border"))
+    console.print(Panel(format_iss_position(data), title="ISS Tracker", border_style="white"))
     
     console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Refresh  [info]Enter[/info] - Back")
     choice = input("> ").strip().lower()
@@ -1040,7 +1040,7 @@ def format_kp_index(kp: float) -> str:
 
 def create_space_weather_table(data: dict) -> Table:
     """Create table for space weather overview."""
-    table = Table(title="Space Weather Overview", show_header=True, header_style="title", expand=True, border_style="border")
+    table = Table(title="Space Weather Overview", show_header=True, header_style="title", expand=True, border_style="white")
     table.add_column("Category", style="number", width=18, no_wrap=True)
     table.add_column("Details", style="text")
     
@@ -1118,7 +1118,7 @@ def show_space_weather():
                 forecast_text.append("3-Day Forecast Highlights:\n", style="title")
                 for line in key_lines[:6]:
                     forecast_text.append(f"  {line.strip()}\n", style="text")
-                console.print(Panel(forecast_text, title="NOAA SWPC Forecast", border_style="border"))
+                console.print(Panel(forecast_text, title="NOAA SWPC Forecast", border_style="white"))
         
         console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Refresh  [info]Enter[/info] - Back")
         choice = input("> ").strip().lower()
@@ -1197,6 +1197,9 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
     """Calculate visible passes for satellites from observer location."""
     from sgp4.api import Satrec, jday
     from math import degrees, radians, sin, cos, sqrt, atan2, asin, acos
+    from datetime import datetime, timezone
+    from .astronomy import calculate_moon_phase
+    from .weather import get_cloud_cover
     
     passes = []
     now = datetime.now(timezone.utc)
@@ -1379,6 +1382,15 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                 # Quality score
                                 quality = calculate_pass_quality(pass_max_el, duration, sun_el_max, magnitude, rarity)
                                 
+                                # Get cloud cover for this pass
+                                cloud_pct = get_cloud_cover(obs_lat, obs_lon, pass_max_time)
+                                
+                                # Get moon phase for night passes only
+                                sun_el_max, _ = calculate_sun_position(pass_max_time, obs_lat, obs_lon)
+                                moon_data = None
+                                if sun_el_max < -6:  # Night pass
+                                    moon_data = calculate_moon_phase(pass_max_time, obs_lat, obs_lon)
+                                
                                 passes.append({
                                     "name": sat_name,
                                     "start": pass_start,
@@ -1390,7 +1402,9 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                     "duration": duration,
                                     "visible": True,
                                     "magnitude": magnitude,
-                                    "quality": quality
+                                    "quality": quality,
+                                    "cloud_cover": cloud_pct,
+                                    "moon_phase": moon_data
                                 })
         
         except Exception:
@@ -2008,7 +2022,7 @@ def format_launch_status_plain(status: dict) -> str:
 
 def create_launches_table(launches: list[dict]) -> Table:
     """Create table for launches list - compact single-line format."""
-    table = Table(title="Upcoming Launches", show_header=True, header_style="title", expand=True, border_style="border")
+    table = Table(title="Upcoming Launches", show_header=True, header_style="title", expand=True, border_style="white")
     table.add_column("#", style="number", justify="right", width=4, no_wrap=True)
     table.add_column("Mission", style="name", min_width=40, overflow="fold")
     table.add_column("Rocket / Provider", style="rocket", min_width=25, overflow="fold")
@@ -2072,14 +2086,14 @@ def create_launches_panel_list(launches: list[dict]) -> list:
             text.append("  ")
         text.append(f"[{status}]", style=status_style)
 
-        panels.append(Panel(text, border_style="border", padding=(0, 1)))
+        panels.append(Panel(text, border_style="white", padding=(0, 1)))
 
     return panels
 
 
 def create_launch_detail_table(launch: dict) -> Table:
     """Create detailed table for a single launch."""
-    table = Table(title=f"Launch Details: {launch.get('name', 'Unknown')}", show_header=True, expand=True, border_style="border")
+    table = Table(title=f"Launch Details: {launch.get('name', 'Unknown')}", show_header=True, expand=True, border_style="white")
     table.add_column("Property", style="number", width=22, no_wrap=True)
     table.add_column("Value", style="text")
 
@@ -2261,9 +2275,9 @@ def show_dashboard():
             iss_text.append(f" Lat: {pos.get('latitude', 'N/A')}  Lon: {pos.get('longitude', 'N/A')}\n", style="text")
             iss_text.append(f" Alt: {iss_data.get('altitude', 'N/A')} km  Vel: {iss_data.get('velocity', 'N/A')} km/h\n", style="text")
             iss_text.append(f" Vis: {iss_data.get('visibility', 'N/A')}  Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
-            layout["iss"].update(Panel(iss_text, title="[info]ISS[/info]", border_style="border", padding=(0, 1)))
+            layout["iss"].update(Panel(iss_text, title="[info]ISS[/info]", border_style="white", padding=(0, 1)))
         else:
-            layout["iss"].update(Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="border"))
+            layout["iss"].update(Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="white"))
         
         # Tiangong Panel
         tg_data = fetch_iss_position()
@@ -2274,9 +2288,9 @@ def show_dashboard():
             tg_text.append(f" Lat: {pos.get('latitude', 'N/A')}  Lon: {pos.get('longitude', 'N/A')}\n", style="text")
             tg_text.append(f" Alt: {tg_data.get('altitude', 'N/A')} km  Vel: {tg_data.get('velocity', 'N/A')} km/h\n", style="text")
             tg_text.append(f" Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
-            layout["tiangong"].update(Panel(tg_text, title="[info]Tiangong[/info]", border_style="border"))
+            layout["tiangong"].update(Panel(tg_text, title="[info]Tiangong[/info]", border_style="white"))
         else:
-            layout["tiangong"].update(Panel("[error]Tiangong data unavailable[/error]", title="[info]Tiangong[/info]", border_style="border"))
+            layout["tiangong"].update(Panel("[error]Tiangong data unavailable[/error]", title="[info]Tiangong[/info]", border_style="white"))
         
         # Next passes (top 5)
         passes_text = Text()
@@ -2297,12 +2311,20 @@ def show_dashboard():
                     mag = p.get("magnitude", 99)
                     q = p.get("quality", 0)
                     mag_str = f" mag {mag:.1f}" if mag < 99 else ""
-                    passes_text.append(f" {p['name'][:18]:18s} {start_str} max {p['max_elevation']:.0f}°{mag_str} Q{q}\n", style="text")
+                    cloud_pct = p.get("cloud_cover")
+                    moon_data = p.get("moon_phase")
+                    cloud_str = f" CLOUD {cloud_pct}%" if cloud_pct is not None else ""
+                    moon_str = ""
+                    if moon_data:
+                        phase = moon_data['phase_name']
+                        illum = moon_data['illumination_pct']
+                        moon_str = f" MOON {phase} {illum:.0f}%"
+                    passes_text.append(f" {p['name'][:18]:18s} {start_str} max {p['max_elevation']:.0f}°{mag_str} Q{q}{cloud_str}{moon_str}\n", style="text")
             else:
                 passes_text.append(" No satellite data\n", style="muted")
         except Exception:
             passes_text.append(" Error calculating passes\n", style="error")
-        layout["passes"].update(Panel(passes_text, title="[info]Passes[/info]", border_style="border", padding=(0, 1)))
+        layout["passes"].update(Panel(passes_text, title="[info]Passes[/info]", border_style="white", padding=(0, 1)))
         
         # Space Weather
         weather_data = fetch_space_weather()
@@ -2323,7 +2345,7 @@ def show_dashboard():
             weather_text.append(f" Storm: {weather_data.get('storm_level', 'Quiet')}", style="text")
         else:
             weather_text.append(" No data", style="muted")
-        layout["weather"].update(Panel(weather_text, title="[info]Weather[/info]", border_style="border"))
+        layout["weather"].update(Panel(weather_text, title="[info]Weather[/info]", border_style="white"))
         
         # People in Space
         people_data = fetch_space_data()
@@ -2336,7 +2358,7 @@ def show_dashboard():
             people_text.append(f" Total: {total}", style="highlight")
         else:
             people_text.append(" No data", style="muted")
-        layout["people"].update(Panel(people_text, title="[info]People[/info]", border_style="border"))
+        layout["people"].update(Panel(people_text, title="[info]People[/info]", border_style="white"))
         
         # Upcoming Launches
         launches_data = fetch_launches()
@@ -2353,7 +2375,7 @@ def show_dashboard():
                 launches_text.append(f" {status_formatted}\n", style="text")
         else:
             launches_text.append(" No data", style="muted")
-        layout["launches"].update(Panel(launches_text, title="[info]Launches[/info]", border_style="border"))
+        layout["launches"].update(Panel(launches_text, title="[info]Launches[/info]", border_style="white"))
         
         # APOD
         apod_data = fetch_apod_date(None)
@@ -2366,7 +2388,7 @@ def show_dashboard():
             apod_text.append(f" {date}", style="muted")
         else:
             apod_text.append(" No data", style="muted")
-        layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="border"))
+        layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="white"))
         
         # Footer
         footer_text = Text.from_markup("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  [info]:[/info] Command  ")
@@ -2434,7 +2456,7 @@ def show_main_menu():
     
     panel = Panel(
         Align.center(menu_text),
-        border_style="border",
+        border_style="white",
         title_align="center",
     )
     console.print(panel)
