@@ -26,6 +26,24 @@ from rich.theme import Theme
 from rich.tree import Tree
 
 THEMES = {
+    "default": Theme({
+        "info": "cyan",
+        "warning": "yellow",
+        "error": "bold red",
+        "success": "green",
+        "muted": "dim",
+        "highlight": "bold white",
+        "title": "bold cyan",
+        "border": "white",
+        "text": "white",
+        "number": "cyan",
+        "name": "bold white",
+        "country": "green",
+        "rocket": "green",
+        "provider": "green",
+        "date": "white",
+        "status": "white",
+    }),
     "catppuccin-mocha": Theme({
         "info": "#89b4fa",
         "warning": "#f9e2af",
@@ -2320,8 +2338,9 @@ def show_dashboard():
         layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="border", padding=(0, 1)))
         
         # Footer
-        footer_text = Text()
-        footer_text.append("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  •  Auto-refresh: 2 min  •  ", style="info")
+        footer_text = Text.from_markup(
+            "  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  •  Auto-refresh: 2 min  •  "
+        )
         footer_text.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
         layout["footer"].update(Align.center(footer_text))
         
