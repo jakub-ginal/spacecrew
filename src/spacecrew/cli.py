@@ -2379,12 +2379,15 @@ def show_dashboard():
     layout = build_dashboard()
     
     # Live display with keyboard handling
+    # Check if we have a real TTY for single-character input
+    has_tty = sys.stdin.isatty()
+    
     with Live(layout, console=console, refresh_per_second=1/120, screen=True) as live:
         last_refresh = time.time()
         while True:
             try:
-                # Check for keyboard input (non-blocking)
-                if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+                # Check for keyboard input (non-blocking) - only works with real TTY
+                if has_tty and sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
                     key = sys.stdin.read(1).lower()
                     if key == 'q':
                         break
