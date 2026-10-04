@@ -1949,8 +1949,31 @@ def get_launch_countdown(window_start: str) -> str:
         return ""
 
 
+def get_launch_countdown_plain(window_start: str) -> str:
+    """Calculate time until launch window start (plain text for dashboard)."""
+    if not window_start or window_start == "TBD":
+        return ""
+    try:
+        dt = datetime.fromisoformat(window_start.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if dt <= now:
+            return "LAUNCHED"
+        diff = dt - now
+        days = diff.days
+        hours, rem = divmod(diff.seconds, 3600)
+        minutes, _ = divmod(rem, 60)
+        if days > 0:
+            return f"T-{days}d {hours:02d}h {minutes:02d}m"
+        elif hours > 0:
+            return f"T-{hours}h {minutes:02d}m"
+        else:
+            return f"T-{minutes}m"
+    except Exception:
+        return ""
+
+
 def format_launch_status(status: dict) -> str:
-    """Format launch status with color."""
+    """Format launch status with color (for tables)."""
     if not status:
         return "[dim]Unknown[/dim]"
     name = status.get("name", "Unknown")
@@ -1963,6 +1986,23 @@ def format_launch_status(status: dict) -> str:
         return f"[bold red]{name}[/bold red]"
     elif status_id == 4:
         return f"[dim]{name}[/dim]"
+    return name
+
+
+def format_launch_status_plain(status: dict) -> str:
+    """Format launch status without markup (for dashboard)."""
+    if not status:
+        return "Unknown"
+    name = status.get("name", "Unknown")
+    status_id = status.get("id", 0)
+    if status_id == 1:
+        return f"{name} [Go for Launch]"
+    elif status_id == 2:
+        return f"{name} [Confirmed]"
+    elif status_id == 3:
+        return f"{name} [LAUNCHED]"
+    elif status_id == 4:
+        return f"{name} [TBD]"
     return name
 
 
@@ -2161,10 +2201,10 @@ def show_launch_detail(launch: dict):
 
 def show_dashboard():
     """Show stunning btop-like dashboard with all space data."""
-    from rich.layout import Layout
-    from rich.live import Live
-    from rich.align import Align
     from datetime import datetime, timezone
+    from rich.panel import Panel
+    from rich.columns import Columns
+    from rich.align import Align
     
     # Get observer location
     lat = config.get("observer_lat")
@@ -2173,47 +2213,17 @@ def show_dashboard():
     
     if lat is None or lon is None:
         clear_screen()
-        console.print("[warning]Set your location first in Satellite Passes → Change location[/warning]")
+        console.print("[warning]Set your location first in Satellite Passes -> Change location[/warning]")
         input("\nPress Enter to return...")
         return
-    
-    layout = Layout()
-    layout.split_column(
-        Layout(name="header", size=3),
-        Layout(name="main"),
-        Layout(name="footer", size=3),
-    )
-    layout["main"].split_row(
-        Layout(name="left", ratio=2),
-        Layout(name="right", ratio=1),
-    )
-    layout["left"].split_column(
-        Layout(name="iss", ratio=1),
-        Layout(name="tiangong", ratio=1),
-        Layout(name="passes", ratio=2),
-    )
-    layout["right"].split_column(
-        Layout(name="weather", ratio=1),
-        Layout(name="people", ratio=1),
-        Layout(name="launches", ratio=1),
-        Layout(name="apod", ratio=1),
-    )
     
     def build_dashboard():
         now = datetime.now(timezone.utc)
         
         # Header
-        header_text = Text()
-        header_text.append(" ╭─────────────────────────────────────────────────────────────────╮ ", style="border")
-        header_text.append("\n")
-        header_text.append(" │  ", style="border")
-        header_text.append("SPACECREW DASHBOARD", style="highlight")
-        header_text.append("  │  ", style="border")
-        header_text.append(f" {now.strftime('%Y-%m-%d %H:%M:%S UTC')}  ", style="muted")
-        header_text.append(" │ ", style="border")
-        header_text.append("\n")
-        header_text.append(" ╰─────────────────────────────────────────────────────────────────╯ ", style="border")
-        layout["header"].update(Align.center(header_text))
+        header = Text()
+        header.append(" SPACECREW DASHBOARD", style="highlight")
+        header.append(f"  {now.strftime('%Y-%m-%d %H:%M:%S UTC')}", style="muted")
         
         # ISS Panel
         iss_data = fetch_iss_position()
@@ -2221,30 +2231,30 @@ def show_dashboard():
             pos = iss_data["iss_position"]
             iss_text = Text()
             iss_text.append(" ISS (ZARYA)\n", style="title")
-            iss_text.append(f"   Lat: {pos.get('latitude', 'N/A')}\n", style="text")
-            iss_text.append(f"   Lon: {pos.get('longitude', 'N/A')}\n", style="text")
-            iss_text.append(f"   Alt: {iss_data.get('altitude', 'N/A')} km\n", style="text")
-            iss_text.append(f"   Vel: {iss_data.get('velocity', 'N/A')} km/h\n", style="text")
-            iss_text.append(f"   Vis: {iss_data.get('visibility', 'N/A')}\n", style="text")
-            iss_text.append(f"   Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
-            layout["iss"].update(Panel(iss_text, title="[info]ISS[/info]", border_style="border", padding=(0, 1)))
+            iss_text.append(f" Lat: {pos.get('latitude', 'N/A')}\n", style="text")
+            iss_text.append(f" Lon: {pos.get('longitude', 'N/A')}\n", style="text")
+            iss_text.append(f" Alt: {iss_data.get('altitude', 'N/A')} km\n", style="text")
+            iss_text.append(f" Vel: {iss_data.get('velocity', 'N/A')} km/h\n", style="text")
+            iss_text.append(f" Vis: {iss_data.get('visibility', 'N/A')}\n", style="text")
+            iss_text.append(f" Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
+            iss_panel = Panel(iss_text, title="[info]ISS[/info]", border_style="border", padding=(0, 1))
         else:
-            layout["iss"].update(Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="border"))
+            iss_panel = Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="border")
         
         # Tiangong Panel
-        tg_data = fetch_iss_position()  # Using same API for now
+        tg_data = fetch_iss_position()
         if tg_data and tg_data.get("iss_position"):
             pos = tg_data["iss_position"]
             tg_text = Text()
             tg_text.append(" TIANGONG\n", style="title")
-            tg_text.append(f"   Lat: {pos.get('latitude', 'N/A')}\n", style="text")
-            tg_text.append(f"   Lon: {pos.get('longitude', 'N/A')}\n", style="text")
-            tg_text.append(f"   Alt: {tg_data.get('altitude', 'N/A')} km\n", style="text")
-            tg_text.append(f"   Vel: {tg_data.get('velocity', 'N/A')} km/h\n", style="text")
-            tg_text.append(f"   Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
-            layout["tiangong"].update(Panel(tg_text, title="[info]Tiangong[/info]", border_style="border", padding=(0, 1)))
+            tg_text.append(f" Lat: {pos.get('latitude', 'N/A')}\n", style="text")
+            tg_text.append(f" Lon: {pos.get('longitude', 'N/A')}\n", style="text")
+            tg_text.append(f" Alt: {tg_data.get('altitude', 'N/A')} km\n", style="text")
+            tg_text.append(f" Vel: {tg_data.get('velocity', 'N/A')} km/h\n", style="text")
+            tg_text.append(f" Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
+            tg_panel = Panel(tg_text, title="[info]Tiangong[/info]", border_style="border", padding=(0, 1))
         else:
-            layout["tiangong"].update(Panel("[error]Tiangong data unavailable[/error]", title="[info]Tiangong[/info]", border_style="border"))
+            tg_panel = Panel("[error]Tiangong data unavailable[/error]", title="[info]Tiangong[/info]", border_style="border")
         
         # Next passes (top 5)
         passes_text = Text()
@@ -2265,12 +2275,12 @@ def show_dashboard():
                     mag = p.get("magnitude", 99)
                     q = p.get("quality", 0)
                     mag_str = f" mag {mag:.1f}" if mag < 99 else ""
-                    passes_text.append(f"   {p['name'][:20]:20s} {start_str}  max {p['max_elevation']:.0f}°{mag_str}  Q{q}\n", style="text")
+                    passes_text.append(f" {p['name'][:20]:20s} {start_str}  max {p['max_elevation']:.0f}°{mag_str}  Q{q}\n", style="text")
             else:
-                passes_text.append("   No satellite data\n", style="muted")
+                passes_text.append(" No satellite data\n", style="muted")
         except Exception:
-            passes_text.append("   Error calculating passes\n", style="error")
-        layout["passes"].update(Panel(passes_text, title="[info]Passes[/info]", border_style="border", padding=(0, 1)))
+            passes_text.append(" Error calculating passes\n", style="error")
+        passes_panel = Panel(passes_text, title="[info]Passes[/info]", border_style="border", padding=(0, 1))
         
         # Space Weather
         weather_data = fetch_space_weather()
@@ -2282,16 +2292,16 @@ def show_dashboard():
                 for f in flares[:2]:
                     cls = f.get("classType", "N/A")
                     peak = f.get("peakTime", "").replace("T", " ").replace("Z", " UTC")
-                    weather_text.append(f"   {cls}  {peak}\n", style="text")
+                    weather_text.append(f" {cls}  {peak}\n", style="text")
             kp = weather_data.get("kp_index", [])
             if kp:
                 current_kp = kp[-1].get("kp_index", 0) if kp else 0
                 max_kp = max((d.get("kp_index", 0) for d in kp), default=0)
-                weather_text.append(f"   Kp: {current_kp:.1f}  (max {max_kp:.1f})\n", style="text")
-            weather_text.append(f"   Storm: {weather_data.get('storm_level', 'Quiet')}", style="text")
+                weather_text.append(f" Kp: {current_kp:.1f}  (max {max_kp:.1f})\n", style="text")
+            weather_text.append(f" Storm: {weather_data.get('storm_level', 'Quiet')}", style="text")
         else:
-            weather_text.append("   No data", style="muted")
-        layout["weather"].update(Panel(weather_text, title="[info]Weather[/info]", border_style="border", padding=(0, 1)))
+            weather_text.append(" No data", style="muted")
+        weather_panel = Panel(weather_text, title="[info]Weather[/info]", border_style="border", padding=(0, 1))
         
         # People in Space
         people_data = fetch_space_data()
@@ -2299,13 +2309,12 @@ def show_dashboard():
         people_text.append(" PEOPLE IN SPACE\n", style="title")
         if people_data:
             iss_groups, tg_groups = group_people_by_station(people_data)
-            people_text.append(f"   ISS: {sum(len(g) for g in iss_groups.values())}  ", style="text")
-            people_text.append(f"Tiangong: {sum(len(g) for g in tg_groups.values())}\n", style="text")
+            people_text.append(f" ISS: {sum(len(g) for g in iss_groups.values())}  Tiangong: {sum(len(g) for g in tg_groups.values())}\n", style="text")
             total = len(people_data)
-            people_text.append(f"   Total: {total}", style="highlight")
+            people_text.append(f" Total: {total}", style="highlight")
         else:
-            people_text.append("   No data", style="muted")
-        layout["people"].update(Panel(people_text, title="[info]People[/info]", border_style="border", padding=(0, 1)))
+            people_text.append(" No data", style="muted")
+        people_panel = Panel(people_text, title="[info]People[/info]", border_style="border", padding=(0, 1))
         
         # Upcoming Launches
         launches_data = fetch_launches()
@@ -2315,14 +2324,14 @@ def show_dashboard():
             for i, launch in enumerate(launches_data[:3]):
                 name = launch.get("name", "Unknown")[:25]
                 window = format_launch_datetime(launch.get("window_start", ""))
-                status = launch.get("status", {}).get("name", "Unknown")
-                countdown = get_launch_countdown(launch.get("window_start", ""))
-                launches_text.append(f"   {name}\n", style="text")
-                launches_text.append(f"   {window}  {countdown}\n", style="muted")
-                launches_text.append(f"   {status}\n\n", style="text")
+                countdown = get_launch_countdown_plain(launch.get("window_start", ""))
+                status_formatted = format_launch_status_plain(launch.get("status", {}))
+                launches_text.append(f" {name}\n", style="text")
+                launches_text.append(f" {window}  {countdown}\n", style="muted")
+                launches_text.append(f" {status_formatted}\n\n", style="text")
         else:
-            launches_text.append("   No data", style="muted")
-        layout["launches"].update(Panel(launches_text, title="[info]Launches[/info]", border_style="border", padding=(0, 1)))
+            launches_text.append(" No data", style="muted")
+        launches_panel = Panel(launches_text, title="[info]Launches[/info]", border_style="border", padding=(0, 1))
         
         # APOD
         apod_data = fetch_apod_date(None)
@@ -2331,36 +2340,55 @@ def show_dashboard():
         if apod_data:
             title = apod_data.get("title", "Unknown")[:40]
             date = apod_data.get("date", "Unknown")
-            apod_text.append(f"   {title}\n", style="text")
-            apod_text.append(f"   {date}", style="muted")
+            apod_text.append(f" {title}\n", style="text")
+            apod_text.append(f" {date}", style="muted")
         else:
-            apod_text.append("   No data", style="muted")
-        layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="border", padding=(0, 1)))
+            apod_text.append(" No data", style="muted")
+        apod_panel = Panel(apod_text, title="[info]APOD[/info]", border_style="border", padding=(0, 1))
+        
+        return (header, iss_panel, tg_panel, passes_panel, weather_panel, people_panel, launches_panel, apod_panel)
+    
+    # Simple loop with input like other modes
+    while True:
+        clear_screen()
+        
+        header, iss_panel, tg_panel, passes_panel, weather_panel, people_panel, launches_panel, apod_panel = build_dashboard()
+        
+        # Display using columns and panels
+        from rich.columns import Columns
+        from rich.panel import Panel
+        
+        console.print(header)
+        console.print()
+        
+        # Left column
+        left = Columns([iss_panel, tg_panel], equal=True, expand=True)
+        console.print(left)
+        console.print()
+        console.print(passes_panel)
+        console.print()
+        
+        # Right column
+        right = Columns([weather_panel, people_panel], equal=True, expand=True)
+        console.print(right)
+        console.print()
+        
+        bottom = Columns([launches_panel, apod_panel], equal=True, expand=True)
+        console.print(bottom)
+        console.print()
         
         # Footer
-        footer_text = Text.from_markup(
-            "  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  •  Auto-refresh: 2 min  •  "
-        )
-        footer_text.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
-        layout["footer"].update(Align.center(footer_text))
+        footer = Text.from_markup(" [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  ")
+        footer.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
+        console.print(Align.center(footer))
         
-        return layout
-    
-    # Initial build
-    layout = build_dashboard()
-    
-    # Live display with 2-minute auto-refresh
-    with Live(layout, console=console, refresh_per_second=1/120, screen=True) as live:
-        last_refresh = time.time()
-        while True:
-            try:
-                if time.time() - last_refresh > 120:  # 2 minutes
-                    layout = build_dashboard()
-                    live.update(layout)
-                    last_refresh = time.time()
-                time.sleep(1)
-            except KeyboardInterrupt:
-                break
+        choice = input("> ").strip().lower()
+        
+        if not choice or choice == "q":
+            break
+        elif choice == "r":
+            continue  # Loop will rebuild dashboard
+        # Any other input = back
     
     clear_screen()
 
