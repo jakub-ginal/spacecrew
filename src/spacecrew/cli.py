@@ -2369,7 +2369,7 @@ def show_dashboard():
         layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="border"))
         
         # Footer
-        footer_text = Text.from_markup("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  ")
+        footer_text = Text.from_markup("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  [info]:[/info] Command  ")
         footer_text.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
         layout["footer"].update(Align.center(footer_text))
         
@@ -2393,6 +2393,25 @@ def show_dashboard():
                         live.update(layout)
                     elif key == '\n' or key == '\r':
                         break
+                    elif key == ':':
+                        # Enter command mode - temporarily suspend Live for input
+                        live.stop()
+                        try:
+                            cmd = console.input("[info]:[/info] ").strip().lower()
+                        except (EOFError, KeyboardInterrupt):
+                            cmd = 'q'
+                        live.start()
+                        if cmd in ('q', 'quit', 'exit'):
+                            break
+                        elif cmd in ('r', 'refresh'):
+                            layout = build_dashboard()
+                            live.update(layout)
+                        elif cmd in ('h', 'help'):
+                            # Show help briefly
+                            live.stop()
+                            console.print("[info]Commands:[/info]  r/refresh - Refresh  q/quit/exit - Exit  Enter - Back  : - Command mode")
+                            input("Press Enter to continue...")
+                            live.start()
                 
                 # Auto-refresh every 2 minutes
                 if time.time() - last_refresh > 120:
