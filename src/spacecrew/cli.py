@@ -1790,11 +1790,19 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
                 dur = int(p["duration"])
                 mag = p.get("magnitude", 99)
                 quality = p.get("quality", 0)
+                cloud_pct = p.get("cloud_cover")
+                moon_data = p.get("moon_phase")
                 mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
                 qual_str = f"  Q{quality}" if quality > 0 else ""
+                cloud_str = f" CLOUD {cloud_pct}%" if cloud_pct is not None else ""
+                moon_str = ""
+                if moon_data:
+                    phase = moon_data['phase_name']
+                    illum = moon_data['illumination_pct']
+                    moon_str = f" MOON {phase} {illum:.0f}%"
                 visible = "✓" if p["visible"] else "✗"
                 color = "success" if p["visible"] else "muted"
-                console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}  {visible}[/{color}]")
+                console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/{color}]")
         
         console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Recalculate  [info]Enter[/info] - Back")
         action = input("> ").strip().lower()
