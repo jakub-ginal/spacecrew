@@ -2376,55 +2376,21 @@ def show_dashboard():
         return layout
     
     # Initial build
-    layout = build_dashboard()
-    
-    # Live display with keyboard handling
-    # Check if we have a real TTY for single-character input
-    has_tty = sys.stdin.isatty()
-    
-    with Live(layout, console=console, refresh_per_second=1/120, screen=True) as live:
-        last_refresh = time.time()
-        while True:
-            try:
-                # Check for keyboard input (non-blocking) - only works with real TTY
-                if has_tty and sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                    key = sys.stdin.read(1).lower()
-                    if key == 'q':
-                        break
-                    elif key == 'r':
-                        layout = build_dashboard()
-                        live.update(layout)
-                    elif key == '\n' or key == '\r':
-                        break
-                    elif key == ':':
-                        # Enter command mode - temporarily suspend Live for input
-                        live.stop()
-                        try:
-                            cmd = console.input("[info]:[/info] ").strip().lower()
-                        except (EOFError, KeyboardInterrupt):
-                            cmd = 'q'
-                        live.start()
-                        if cmd in ('q', 'quit', 'exit'):
-                            break
-                        elif cmd in ('r', 'refresh'):
-                            layout = build_dashboard()
-                            live.update(layout)
-                        elif cmd in ('h', 'help'):
-                            # Show help briefly
-                            live.stop()
-                            console.print("[info]Commands:[/info]  r/refresh - Refresh  q/quit/exit - Exit  Enter - Back  : - Command mode")
-                            input("Press Enter to continue...")
-                            live.start()
-                
-                # Auto-refresh every 2 minutes
-                if time.time() - last_refresh > 120:
-                    layout = build_dashboard()
-                    live.update(layout)
-                    last_refresh = time.time()
-                
-                time.sleep(0.1)
-            except KeyboardInterrupt:
-                break
+    # Simple input loop like other modes
+    # Simple input loop like other modes
+    # Simple input loop - only Enter to go back
+    while True:
+        clear_screen()
+        layout = build_dashboard()
+        
+        # Render the full layout (proper grid)
+        console.print(layout)
+        
+        choice = input("> ").strip().lower()
+        
+        if not choice:
+            break  # Enter = back
+        # Any other input ignored, only Enter works
     
     clear_screen()
 
