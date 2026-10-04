@@ -2202,7 +2202,7 @@ def show_dashboard():
         if iss_data and iss_data.get("iss_position"):
             pos = iss_data["iss_position"]
             iss_text = Text()
-            iss_text.append(" 🛰️  ISS (ZARYA)\n", style="title")
+            iss_text.append(" ISS (ZARYA)\n", style="title")
             iss_text.append(f"   Lat: {pos.get('latitude', 'N/A')}\n", style="text")
             iss_text.append(f"   Lon: {pos.get('longitude', 'N/A')}\n", style="text")
             iss_text.append(f"   Alt: {iss_data.get('altitude', 'N/A')} km\n", style="text")
@@ -2218,7 +2218,7 @@ def show_dashboard():
         if tg_data and tg_data.get("iss_position"):
             pos = tg_data["iss_position"]
             tg_text = Text()
-            tg_text.append(" 🛰️  TIANGONG\n", style="title")
+            tg_text.append(" TIANGONG\n", style="title")
             tg_text.append(f"   Lat: {pos.get('latitude', 'N/A')}\n", style="text")
             tg_text.append(f"   Lon: {pos.get('longitude', 'N/A')}\n", style="text")
             tg_text.append(f"   Alt: {tg_data.get('altitude', 'N/A')} km\n", style="text")
@@ -2230,7 +2230,7 @@ def show_dashboard():
         
         # Next passes (top 5)
         passes_text = Text()
-        passes_text.append(" 📡  NEXT PASSES (24h)\n", style="title")
+        passes_text.append(" NEXT PASSES (24h)\n", style="title")
         try:
             stations = fetch_tle_data("stations")
             iss_sats = [s for s in stations if "ISS" in s["name"] or "ZARYA" in s["name"] or "NAUKA" in s["name"]]
@@ -2257,7 +2257,7 @@ def show_dashboard():
         # Space Weather
         weather_data = fetch_space_weather()
         weather_text = Text()
-        weather_text.append(" ☀️  SPACE WEATHER\n", style="title")
+        weather_text.append(" SPACE WEATHER\n", style="title")
         if weather_data:
             flares = weather_data.get("flares", [])
             if flares:
@@ -2278,7 +2278,7 @@ def show_dashboard():
         # People in Space
         people_data = fetch_space_data()
         people_text = Text()
-        people_text.append(" 👨‍🚀  PEOPLE IN SPACE\n", style="title")
+        people_text.append(" PEOPLE IN SPACE\n", style="title")
         if people_data:
             iss_groups, tg_groups = group_people_by_station(people_data)
             people_text.append(f"   ISS: {sum(len(g) for g in iss_groups.values())}  ", style="text")
@@ -2292,7 +2292,7 @@ def show_dashboard():
         # Upcoming Launches
         launches_data = fetch_launches()
         launches_text = Text()
-        launches_text.append(" 🚀  NEXT LAUNCHES\n", style="title")
+        launches_text.append(" NEXT LAUNCHES\n", style="title")
         if launches_data:
             for i, launch in enumerate(launches_data[:3]):
                 name = launch.get("name", "Unknown")[:25]
@@ -2309,7 +2309,7 @@ def show_dashboard():
         # APOD
         apod_data = fetch_apod_date(None)
         apod_text = Text()
-        apod_text.append(" 🖼️  APOD TODAY\n", style="title")
+        apod_text.append(" APOD TODAY\n", style="title")
         if apod_data:
             title = apod_data.get("title", "Unknown")[:40]
             date = apod_data.get("date", "Unknown")
@@ -2357,28 +2357,28 @@ def show_main_menu():
     menu_text.append("         SPACECREW", style="highlight")
     menu_text.append("\n\n")
     menu_text.append("  1 ", style="number")
-    menu_text.append("Dashboard", style="info")
-    menu_text.append("\n")
-    menu_text.append("  2 ", style="number")
     menu_text.append("People in Space", style="info")
     menu_text.append("\n")
-    menu_text.append("  3 ", style="number")
+    menu_text.append("  2 ", style="number")
     menu_text.append("NASA APOD", style="info")
     menu_text.append("\n")
-    menu_text.append("  4 ", style="number")
+    menu_text.append("  3 ", style="number")
     menu_text.append("Upcoming Launches", style="info")
     menu_text.append("\n")
-    menu_text.append("  5 ", style="number")
+    menu_text.append("  4 ", style="number")
     menu_text.append("ISS Position", style="info")
     menu_text.append("\n")
-    menu_text.append("  6 ", style="number")
+    menu_text.append("  5 ", style="number")
     menu_text.append("Space Weather", style="info")
     menu_text.append("\n")
-    menu_text.append("  7 ", style="number")
+    menu_text.append("  6 ", style="number")
     menu_text.append("Satellite Passes", style="info")
     menu_text.append("\n")
-    menu_text.append("  8 ", style="number")
+    menu_text.append("  7 ", style="number")
     menu_text.append(f"Theme ({current_theme})", style="info")
+    menu_text.append("\n")
+    menu_text.append("  8 ", style="number")
+    menu_text.append("Dashboard", style="info")
     menu_text.append("\n")
     menu_text.append("  9 ", style="number")
     menu_text.append("Exit", style="info")
@@ -2522,23 +2522,23 @@ def main():
         if choice in ("9", "quit", "exit", "q"):
             break
         elif choice == "1":
-            show_dashboard()
-        elif choice == "2":
             result = handle_people_in_space()
             if result == "quit":
                 break
-        elif choice == "3":
+        elif choice == "2":
             show_apod_view()
-        elif choice == "4":
+        elif choice == "3":
             show_launches_list()
-        elif choice == "5":
+        elif choice == "4":
             show_iss_position()
-        elif choice == "6":
+        elif choice == "5":
             show_space_weather()
-        elif choice == "7":
+        elif choice == "6":
             show_satellite_passes()
-        elif choice == "8":
+        elif choice == "7":
             show_theme_menu()
+        elif choice == "8":
+            show_dashboard()
         else:
             console.print("[error]Invalid option[/error]")
             time.sleep(1)
