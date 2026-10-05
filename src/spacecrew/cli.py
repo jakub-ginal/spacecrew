@@ -1419,7 +1419,8 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                     "magnitude": magnitude,
                                     "quality": quality,
                                     "cloud_cover": cloud_pct,
-                                    "moon_phase": moon_data
+                                    "moon_phase": moon_data,
+                                    "sun_el_max": sun_el_max
                                 })
         
         except Exception:
@@ -1698,12 +1699,27 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
     }
     
     def get_best_passes(passes):
-        """Filter for best passes: bright, high elevation, long duration, night only."""
-        return [p for p in passes 
-                if p['magnitude'] < 3 
-                and p['max_elevation'] > 30 
-                and p['duration'] > 3 
-                and p.get('sun_el_max', 0) < -6]
+        """Filter for best passes with tiered quality levels."""
+        best = []
+        good = []
+        ok = []
+        for p in passes:
+            if p.get('sun_el_max', 0) >= -6:  # Only night passes
+                continue
+            mag = p['magnitude']
+            max_el = p['max_elevation']
+            dur = p['duration']
+            # Tier 1: Best - very bright, high elevation, long duration
+            if mag < 2 and max_el > 45 and p['duration'] > 5:
+                best.append(p)
+            # Tier 2: Good - bright, decent elevation, decent duration
+            elif mag < 4 and max_el > 25 and p['duration'] > 2:
+                good.append(p)
+            # Tier 3: OK - visible but not great
+            elif mag < 5.5 and max_el > 15 and p['duration'] > 1:
+                ok.append(p)
+        # Return best first, then good, then ok
+        return best + good + ok
     
     while True:
         clear_screen()
@@ -1730,18 +1746,19 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                 clear_screen()
                 console.print("[title]Filter by Type[/title]")
                 console.print("")
-                console.print(f"  [number]{key}[/number] {info["name"]}")
-                console.print(f"  [number]{key}[/number] {info["name"]}")
+                for key, info in GROUP_OPTIONS.items():
+                    console.print(f"  [number]{key}[/number] {info["name"]}")
                 console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
-                console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
+                
+                f_choice = input("> ").strip().lower()
                 
                 if not f_choice:
                     break
                 elif f_choice in GROUP_OPTIONS:
                     selected_groups = GROUP_OPTIONS[f_choice]["groups"]
                     break
-            else:
-                continue
+                else:
+                    continue
         elif choice not in ("1", "2"):
             continue
         
@@ -1753,7 +1770,9 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         if 'selected_groups' in locals():
             groups = selected_groups
         elif mode == "best":
-            groups = ["iss", "stations", "starlink"]
+            # For "best" mode, only load groups with bright satellites
+            # Starlink satellites are typically mag 5-6, too dim for "best" tier
+            groups = ["iss", "stations"]
         else:
             groups = ["stations", "starlink", "iridium", "gps", "geo", "weather", "science", "amateur", "military", "radar", "cubesat", "other"]
         
@@ -1783,7 +1802,6 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
             input("\nPress Enter to return...")
         console.print(f"[success]Loaded {len(all_satellites)} satellites[/success]\n")
         console.print("[muted]Calculating passes...[/muted]\n")
-        console.print("[muted]Calculating passes...[/muted]")
         
         passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
         
