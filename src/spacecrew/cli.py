@@ -1149,6 +1149,21 @@ CELESTRAK_TLE_URLS = {
     "other": "https://celestrak.org/NORAD/elements/gp.php?GROUP=other&FORMAT=tle",
 }
 
+# Satellite group mapping for simplified UI
+SATELLITE_GROUPS = {
+    "ISS & Stations": ["iss", "stations"],
+    "Starlink": ["starlink"],
+    "Navigation": ["gps", "galileo", "beidou", "glonass"],
+    "Science & Weather": ["weather", "science", "geo", "cubesat"],
+    "Other": ["iridium", "amateur", "military", "radar", "geo", "other"],
+}
+
+# Reverse mapping: individual group -> display group
+SATELLITE_GROUP_MAP = {}
+for display_name, groups in SATELLITE_GROUPS.items():
+    for g in groups:
+        SATELLITE_GROUP_MAP[g] = display_name
+
 
 def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list[dict]:
     """Fetch TLE data from Celestrak."""
@@ -1612,6 +1627,7 @@ def get_rarity_bonus(name: str) -> float:
 
 def show_satellite_passes():
     """Show satellite passes menu and predictions."""
+    """Show satellite passes menu and predictions."""
     from rich.prompt import Prompt
     
     # Get or set observer location
@@ -1641,15 +1657,14 @@ def show_satellite_passes():
         except Exception:
             console.print("[error]Invalid coordinates[/error]")
             time.sleep(1)
-            return
-    
+            return    
     while True:
         clear_screen()
-        console.print(f"[title]Satellite Passes[/title] (Location: {lat:.4f}, {lon:.4f})\n")
-        console.print("  [number]1[/number] Predict passes (3 days)")
-        console.print("  [number]2[/number] Tonight's best passes (24h)")
-        console.print("  [number]3[/number] Specific satellite")
-        console.print("  [number]4[/number] Change location")
+        console.print(f"[title]Satellite Passes[/title] (Location: {lat:.4f}, {lon:.4f})")
+        console.print("  [number]1[/number] Tonight\'s Best")
+        console.print("  [number]2[/number] All Passes")
+        console.print("  [number]3[/number] Specific Satellite")
+        console.print("  [number]4[/number] Change Location")
         console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back to main menu")
         choice = input("> ").strip()
         
@@ -1662,59 +1677,85 @@ def show_satellite_passes():
             time.sleep(1)
             continue
         elif choice == "1":
-            predict_passes(lat, lon, alt, days=3)
+            predict_passes(lat, lon, alt, days=1, mode="best")
         elif choice == "2":
-            predict_passes(lat, lon, alt, days=1)
+            predict_passes(lat, lon, alt, days=3, mode="all")
         elif choice == "3":
             predict_specific_satellite(lat, lon, alt)
 
 
-def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
+def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str = "all"):
     """Predict passes for all tracked satellites."""
     from rich.prompt import Prompt
     
+    # Define satellite groups for filtering
+    GROUP_OPTIONS = {
+        "1": {"name": "ISS & Stations", "groups": ["iss", "stations"]},
+        "2": {"name": "Starlink", "groups": ["starlink"]},
+        "3": {"name": "Navigation", "groups": ["gps", "galileo", "beidou"]},
+        "4": {"name": "Science & Weather", "groups": ["weather", "science", "geo", "cubesat"]},
+        "5": {"name": "Other", "groups": ["iridium", "amateur", "military", "radar", "geo", "other"]},
+    }
+    
+    def get_best_passes(passes):
+        """Filter for best passes: bright, high elevation, long duration, night only."""
+        return [p for p in passes 
+                if p['magnitude'] < 3 
+                and p['max_elevation'] > 30 
+                and p['duration'] > 3 
+                and p.get('sun_el_max', 0) < -6]
+    
     while True:
         clear_screen()
-        console.print("[title]Satellite Pass Predictions[/title]\n")
-        console.print("  [number]1[/number] All satellites (stations + Starlink) - {} days".format(days))
-        console.print("  [number]2[/number] Tonight only (24 hours)")
-        console.print("  [number]3[/number] Stations only (ISS, Tiangong, Hubble, etc.)")
-        console.print("  [number]4[/number] Starlink only (first 200)")
-        console.print("  [number]5[/number] Change days (currently {})".format(days))
+        console.print("[title]Satellite Pass Predictions[/title]")
+        console.print("  [number]1[/number] Tonight's Best (smart filter)")
+        console.print("  [number]2[/number] All Passes")
+        console.print("  [number]3[/number] Change Days (currently {})".format(days))
+        console.print("  [number]4[/number] Filter by Type")
         console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
         choice = input("> ").strip()
         
         if not choice:
             return
-        elif choice == "5":
+        elif choice == "3":
             try:
                 days = int(Prompt.ask("Days to predict (1-7)", default=str(days)))
                 days = max(1, min(7, days))
             except ValueError:
                 pass
             continue
-        elif choice not in ("1", "2", "3", "4"):
+        elif choice == "4":
+            # Filter by type
+            while True:
+                clear_screen()
+                console.print("[title]Filter by Type[/title]")
+                console.print("")
+                console.print(f"  [number]{key}[/number] {info["name"]}")
+                console.print(f"  [number]{key}[/number] {info["name"]}")
+                console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
+                console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
+                
+                if not f_choice:
+                    break
+                elif f_choice in GROUP_OPTIONS:
+                    selected_groups = GROUP_OPTIONS[f_choice]["groups"]
+                    break
+            else:
+                continue
+        elif choice not in ("1", "2"):
             continue
+        
+        mode = "best" if choice == "1" else "all"
         
         clear_screen()
         
-        if choice == "1":
-            groups = ["stations", "starlink"]
-            limit = None
-            title = "All Satellites ({} days)".format(days)
-        elif choice == "2":
-            groups = ["stations", "starlink"]
-            limit = None
-            title = "Tonight Only (24 hours)"
-            days = 1
-        elif choice == "3":
-            groups = ["stations"]
-            limit = None
-            title = "Stations Only ({} days)".format(days)
-        elif choice == "4":
-            groups = ["starlink"]
-            limit = 200
-            title = "Starlink Quick Mode (first 200, {} days)".format(days)
+        # Determine groups based on filter selection
+        if 'selected_groups' in locals():
+            groups = selected_groups
+        elif mode == "best":
+            groups = ["iss", "stations", "starlink"]
+        else:
+            groups = ["stations", "starlink", "iridium", "gps", "geo", "weather", "science", "amateur", "military", "radar", "cubesat", "other"]
         
         if len(groups) > 1:
             urls = [(CELESTRAK_TLE_URLS[g], g) for g in groups]
@@ -1731,31 +1772,23 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
                             line2 = lines[i + 2].strip()
                             if line1.startswith("1 ") and line2.startswith("2 "):
                                 sats.append({"name": name, "line1": line1, "line2": line2})
-                    if limit and len(sats) > limit:
-                        sats = sats[:limit]
                     all_satellites.extend(sats)
         else:
             all_satellites = []
             for group in groups:
                 sats = fetch_tle_data(group, show_progress=True)
-                if limit and len(sats) > limit:
-                    sats = sats[:limit]
                 all_satellites.extend(sats)
         
         if not all_satellites:
-            console.print("[error]Error: Could not fetch satellite data[/error]")
             input("\nPress Enter to return...")
-            return
-        
         console.print(f"[success]Loaded {len(all_satellites)} satellites[/success]\n")
+        console.print("[muted]Calculating passes...[/muted]\n")
         console.print("[muted]Calculating passes...[/muted]")
         
         passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
         
-        if choice == "2":
-            now = datetime.now(timezone.utc)
-            cutoff = now + timedelta(hours=24)
-            passes = [p for p in passes if p["start"] < cutoff]
+        if mode == "best":
+            passes = get_best_passes(passes)
         
         if not passes:
             console.print("[yellow]No visible passes found[/yellow]")
@@ -1772,7 +1805,10 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
         sorted_sats = sorted(passes_by_sat.items(), key=lambda x: x[1][0]["start"])
         
         clear_screen()
-        console.print(f"[title]{title}[/title]")
+        if mode == "best":
+            console.print(f"[title]Tonight's Best[/title]")
+        else:
+            console.print(f"[title]All Passes ({days} days)[/title]")
         console.print(f"Location: {lat:.4f}, {lon:.4f}, {alt}m\n")
         
         total_passes = sum(len(v) for v in passes_by_sat.values())
@@ -1781,7 +1817,7 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
         for name, sat_passes in sorted_sats:
             if not sat_passes:
                 continue
-            console.print(f"\n[highlight]{name}[/highlight]")
+            console.print(f"[highlight]{name}[/highlight]")
             for p in sat_passes[:5]:
                 start_str = p["start"].strftime("%m-%d %H:%M UTC")
                 end_str = p["end"].strftime("%H:%M")
@@ -1802,87 +1838,73 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3):
                     moon_str = f" MOON {phase} {illum:.0f}%"
                 visible = "✓" if p["visible"] else "✗"
                 color = "success" if p["visible"] else "muted"
-                console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/{color}]")
+                console.print(f"  [green]{p['start'].strftime('%m-%d %H:%M')}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/green]")
         
-        console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Recalculate  [info]Enter[/info] - Back")
+        console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Recalculate  [info]f[/info] - Filter  [info]Enter[/info] - Back")
         action = input("> ").strip().lower()
         if not action or action != "r":
+            if action == "f":
+                continue  # Show filter menu
             return
         # If 'r', loop continues and recalculates
-
-
 def predict_specific_satellite(lat: float, lon: float, alt: float):
-    """Predict passes for a specific satellite."""
+    """Predict passes for a specific satellite - direct search."""
     from rich.prompt import Prompt
     
     while True:
         clear_screen()
-        console.print("[title]Specific Satellite Prediction[/title]\n")
+        console.print("[title]Specific Satellite Prediction[/title]")
         
-        # Select satellite group
-        console.print("Select satellite group:")
-        groups = list(CELESTRAK_TLE_URLS.keys())
-        for i, g in enumerate(groups, 1):
-            console.print(f"  [number]{i}[/number] {g.capitalize()}")
-        console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
-        choice = input("> ").strip()
+        # Search directly across all groups
+        search = Prompt.ask("Search satellite name (or press Enter to browse all)", default="").strip().lower()
         
-        if not choice:
-            return
-        try:
-            idx = int(choice) - 1
-            if idx < 0 or idx >= len(groups):
-                continue
-        except ValueError:
-            continue
+        # Fetch all satellites from all groups
+        all_satellites = []
+        for group in CELESTRAK_TLE_URLS.keys():
+            sats = fetch_tle_data(group)
+            if sats:
+                all_satellites.extend(sats)
         
-        group = groups[idx]
-        
-        # Fetch TLE data for selected group
-        clear_screen()
-        console.print(f"[info]Fetching {group} TLE data...[/info]\n")
-        satellites = fetch_tle_data(group)
-        
-        if not satellites:
+        if not all_satellites:
             console.print("[error]Error: Could not fetch satellite data[/error]")
             input("\nPress Enter to return...")
-            continue
+            return
         
-        console.print(f"[success]Loaded {len(satellites)} satellites from {group}[/success]\n")
-        
-        # Search/filter
-        search = Prompt.ask("Search satellite name (or press Enter to list all)", default="").strip().lower()
-        
-        filtered = [s for s in satellites if search in s["name"].lower()] if search else satellites
+        # Filter by search
+        if search:
+            filtered = [s for s in all_satellites if search in s["name"].lower()]
+        else:
+            filtered = all_satellites
         
         if not filtered:
             console.print("[warning]No matches found[/warning]")
             time.sleep(1)
             continue
         
-        # Show list with numbers
+        # Show results with pagination
         page_size = 20
         total_pages = (len(filtered) + page_size - 1) // page_size
         page = 0
         
         while True:
             clear_screen()
-            console.print(f"[title]{group.capitalize()} Satellites[/title] (Page {page+1}/{total_pages})\n")
+            console.print(f"[title]Satellites[/title] (Page {page+1}/{total_pages}, {len(filtered)} matches)")
             
-            start = page * page_size
-            end = min(start + page_size, len(filtered))
+            start_idx = page * page_size
+            end_idx = min(start_idx + page_size, len(filtered))
             
-            for i in range(start, end):
+            for i in range(start_idx, end_idx):
                 sat = filtered[i]
-                console.print(f"  [number]{i+1}[/number] {sat['name']}")
+                group = SATELLITE_GROUP_MAP.get(sat.get('group', ''), 'Other')
+                console.print(f"  [number]{i+1}[/number] [{group}] {sat['name']}")
             
             console.print("\n[warning]Actions:[/warning]  [info]n[/info] Next  [info]p[/info] Prev  [info]s[/info] Search  [info]Enter[/info] Back")
             action = input("> ").strip().lower()
             
             if not action:
-                break  # Back to group selection
+                return
             elif action == "s":
-                break  # Will re-prompt search
+                break  # Re-search
             elif action == "n" and page < total_pages - 1:
                 page += 1
                 continue
@@ -1890,10 +1912,9 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
                 page -= 1
                 continue
             else:
-                # Selected a satellite
                 try:
                     idx = int(action) - 1
-                    if start <= idx < end:
+                    if start_idx <= idx < end_idx:
                         selected = filtered[idx]
                         show_satellite_detail(selected, lat, lon, alt)
                 except ValueError:
@@ -1901,20 +1922,24 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
         
         if action == "s":
             continue  # Re-search
-        # If action is empty or "b", loop continues to group selection
-
-
+        # If action is empty, loop continues to group selection
 def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
     """Show detailed passes for a specific satellite."""
     clear_screen()
-    console.print(f"[info]Calculating passes for {sat['name']}...[/info]\n")
-    
+    console.print(f"[info]Calculating passes for {sat["name"]}...[/info]\n")
+
     passes = calculate_visible_passes([sat], lat, lon, alt, days=7)
-    
+
     clear_screen()
-    console.print(f"[title]{sat['name']}[/title] - Next 7 Days\n")
+
+    # Get satellite type badge
+    sat_group = SATELLITE_GROUP_MAP.get(sat.get('group', ''), 'Other')
+    badge = f"[{sat_group}]" if sat_group else ""
+
+    clear_screen()
+    console.print(f"[title]{sat["name"]}[/title] {badge} - Next 7 Days\n")
     console.print(f"Location: {lat:.4f}, {lon:.4f}\n")
-    
+
     if not passes:
         console.print("[warning]No visible passes in the next 7 days[/warning]")
     else:
@@ -1926,14 +1951,23 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
             dur = int(p["duration"])
             mag = p.get("magnitude", 99)
             quality = p.get("quality", 0)
+            cloud_pct = p.get("cloud_cover")
+            moon_data = p.get("moon_phase")
             mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
             qual_str = f"  Q{quality}" if quality > 0 else ""
+            cloud_str = f" CLOUD {cloud_pct}%" if cloud_pct is not None else ""
+            moon_str = ""
+            if moon_data:
+                phase = moon_data['phase_name']
+                illum = moon_data['illumination_pct']
+                moon_str = f" MOON {phase} {illum:.0f}%"
             visible = "✓" if p["visible"] else "✗"
             color = "success" if p["visible"] else "muted"
-            console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}  {visible}[/{color}]")
-    
+            console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/{color}]")
+
     console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
     input("> ")
+
 
 
 def format_launch_datetime(iso_str: str) -> str:
