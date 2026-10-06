@@ -1,0 +1,91 @@
+.SH NAME
+spacecrew \- Track people in space, NASA APOD, launches, ISS position, and space weather
+
+.SH SYNOPSIS
+.B spacecrew
+[\fB\-v\fR|\fB\-\-version\fR]
+[\fB\-\-mode\fR \fIMODE\fR]
+[\fB\-\-no\-cache\fR]
+[\fB\-\-clear\-cache\fR]
+[\fB\-\-offline\fR]
+[\fB\-\-generate\-completion\fR \fI{\fBbash\fR|\fBzsh\fR|\fBfish\fR}\fR]
+
+.SH DESCRIPTION
+.B spacecrew
+is a terminal application for tracking people in space, viewing NASA's
+Astronomy Picture of the Day (APOD), upcoming rocket launches, ISS position,
+space weather, and satellite passes.
+
+.SH OPTIONS
+.TP
+\fB\-v\fR, \fB\-\-version\fR
+Display the version number and exit.
+
+.TP
+\fB\-\-mode\fR \fIMODE\fR
+Start directly in a specific mode. Valid modes:
+dashboard, people, apod, launches, iss, weather, passes.
+
+.TP
+\fB\-\-no\-cache\fR
+Disable persistent cache for this run.
+
+.TP
+\fB\-\-clear\-cache\fR
+Clear expired cache entries and exit.
+
+.TP
+\fB\-\-offline\fR
+Offline mode: use only cached data, no network requests.
+
+.TP
+\fB\-\-generate\-completion\fR \fI{\fBbash\fR|\fBzsh\fR|\fBfish\fR}
+Generate shell completion script for the specified shell (bash, zsh, or fish)
+and print it to stdout. Redirect output to a file to install.
+
+.SH EXAMPLES
+.TP
+\fBspacecrew\fR
+Launch interactive menu.
+
+.TP
+\fBspacecrew \-\-mode passes\fR
+Show satellite pass predictions.
+
+.TP
+\fBspacecrew \-\-mode passes \-\-offline\fR
+Show satellite passes using cached data only.
+
+.TP
+\fBspacecrew \-\-generate\-completion bash\fR
+Generate bash completion script.
+
+.TP
+\fBspacecrew \-\-generate\-completion zsh > \fI~/.config/zsh/completions/_spacecrew\fR
+Install zsh completion.
+
+.TP
+\fBspacecrew \-\-generate\-completion fish > \fI~/.config/fish/completions/spacecrew.fish\fR
+Install fish completion.
+
+.SH FILES
+.TP
+\fI~/.config/spacecrew/config.toml\fR
+Configuration file.
+
+.TP
+\fI~/.config/spacecrew/cache.db\fR
+Cache database.
+
+.SH SEE ALSO
+.BR argcomplete (1),
+.BR rich (1)
+
+.SH AUTHOR
+Jakub Ginał
+
+.SH SEE ALSO
+.BR argcomplete (1),
+.BR rich (1)
+
+Full documentation: https://github.com/jakub-ginal/spacecrew

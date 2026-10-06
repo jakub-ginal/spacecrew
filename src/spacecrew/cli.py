@@ -13,6 +13,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import argcomplete
 import chafa
 import requests
 from PIL import Image
@@ -2609,6 +2610,12 @@ def parse_args():
     parser.add_argument(
         "--offline", action="store_true", help="Offline mode: use only cached data, no network requests"
     )
+    parser.add_argument(
+        "--generate-completion",
+        choices=["bash", "zsh", "fish"],
+        help="Generate shell completion script for the specified shell",
+    )
+    argcomplete.autocomplete(parser)
     return parser.parse_args()
 
 
@@ -2616,6 +2623,20 @@ def main():
     global _global_offline
     args = parse_args()
     
+    # Handle completion generation
+    if getattr(args, 'generate_completion', None):
+        shell = args.generate_completion
+        if shell == "bash":
+            print(argcomplete.shellcode(['bash']))
+        elif shell == "zsh":
+            print(argcomplete.shellcode(['zsh']))
+        elif shell == "fish":
+            print(argcomplete.shellcode(['fish']))
+        return
+
+    global _global_offline
+    args = parse_args()
+
     if args.offline:
         _global_offline = True
         console.print("[yellow]Offline mode: using cached data only[/yellow]")
