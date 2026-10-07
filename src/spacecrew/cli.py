@@ -261,6 +261,7 @@ class Config:
         "observer_lat": None,
         "observer_lon": None,
         "observer_alt": 0,
+        "favorites": [],
     }
     
     def __init__(self):
@@ -294,6 +295,30 @@ class Config:
                 tomli_w.dump(self._config, f)
         except Exception:
             pass
+
+    def get_favorites(self):
+        """Get list of favorite satellite names."""
+        return self._config.get("favorites", [])
+
+    def add_favorite(self, satellite_name: str):
+        """Add a satellite to favorites."""
+        favorites = self.get_favorites()
+        if satellite_name not in favorites:
+            favorites.append(satellite_name)
+            self._config["favorites"] = favorites
+            self.save()
+
+    def remove_favorite(self, satellite_name: str):
+        """Remove a satellite from favorites."""
+        favorites = self.get_favorites()
+        if satellite_name in favorites:
+            favorites.remove(satellite_name)
+            self._config["favorites"] = favorites
+            self.save()
+
+    def is_favorite(self, satellite_name: str) -> bool:
+        """Check if a satellite is in favorites."""
+        return satellite_name in self.get_favorites()
     
     def get(self, key: str, default=None):
         # Check env var first (NASA_API_KEY)
@@ -1729,6 +1754,7 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         console.print("  [number]2[/number] All Passes")
         console.print("  [number]3[/number] Change Days (currently {})".format(days))
         console.print("  [number]4[/number] Filter by Type")
+        console.print("  [number]5[/number] Favorites")
         console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
         choice = input("> ").strip()
         
@@ -1760,7 +1786,17 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                     break
                 else:
                     continue
-        elif choice not in ("1", "2"):
+        elif choice == "5":
+            # Favorites mode - only show favorited satellites
+            favorites = config.get_favorites()
+            if not favorites:
+                console.print("[yellow]No favorites saved. Add satellites from detail view.[/yellow]")
+                time.sleep(1.5)
+                continue
+            selected_groups = ["iss", "stations"]
+            mode = "all"
+            f_choice = "fav"
+        elif choice not in ("1", "2", "5"):
             continue
         
         mode = "best" if choice == "1" else "all"
@@ -1791,12 +1827,14 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                             line1 = lines[i + 1].strip()
                             line2 = lines[i + 2].strip()
                             if line1.startswith("1 ") and line2.startswith("2 "):
-                                sats.append({"name": name, "line1": line1, "line2": line2})
+                                sats.append({"name": name, "line1": line1, "line2": line2, "group": g})
                     all_satellites.extend(sats)
         else:
             all_satellites = []
             for group in groups:
                 sats = fetch_tle_data(group, show_progress=True)
+                for s in sats:
+                    s["group"] = group
                 all_satellites.extend(sats)
         
         if not all_satellites:
@@ -1805,6 +1843,11 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         console.print("[muted]Calculating passes...[/muted]\n")
         
         passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
+        
+        # Filter by favorites if favorites mode was selected
+        if 'f_choice' in locals() and f_choice == "fav":
+            favorites = config.get_favorites()
+            passes = [p for p in passes if p['name'] in favorites]
         
         if mode == "best":
             passes = get_best_passes(passes)
@@ -1833,10 +1876,10 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         total_passes = sum(len(v) for v in passes_by_sat.values())
         console.print(f"[muted]{len(passes_by_sat)} satellites, {total_passes} total passes[/muted]\n")
         
-        for name, sat_passes in sorted_sats:
+        for i, (name, sat_passes) in enumerate(sorted_sats):
             if not sat_passes:
                 continue
-            console.print(f"[highlight]{name}[/highlight]")
+            console.print(f"  [number]{i+1}[/number] [highlight]{name}[/highlight]")
             for p in sat_passes[:5]:
                 start_str = p["start"].strftime("%m-%d %H:%M UTC")
                 end_str = p["end"].strftime("%H:%M")
@@ -1859,13 +1902,27 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                 color = "success" if p["visible"] else "muted"
                 console.print(f"  [green]{p['start'].strftime('%m-%d %H:%M')}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/green]")
         
-        console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Recalculate  [info]f[/info] - Filter  [info]Enter[/info] - Back")
+        console.print("\n[warning]Actions:[/warning]  [number]1-{}[/number] - Select satellite  [info]r[/info] - Recalculate  [info]f[/info] - Filter  [info]Enter[/info] - Back".format(len(sorted_sats)))
         action = input("> ").strip().lower()
-        if not action or action != "r":
-            if action == "f":
-                continue  # Show filter menu
+        if not action:
             return
-        # If 'r', loop continues and recalculates
+        elif action == "r":
+            continue
+        elif action == "f":
+            continue
+        else:
+            # Try to select satellite by number
+            try:
+                idx = int(action) - 1
+                if 0 <= idx < len(sorted_sats):
+                    sat_name = sorted_sats[idx][0]
+                    # Find the original satellite object with TLE data
+                    for s in all_satellites:
+                        if s["name"] == sat_name:
+                            show_satellite_detail(s, lat, lon, alt)
+                            break
+            except ValueError:
+                pass
 def predict_specific_satellite(lat: float, lon: float, alt: float):
     """Predict passes for a specific satellite - direct search."""
     from rich.prompt import Prompt
@@ -1956,7 +2013,9 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
     badge = f"[{sat_group}]" if sat_group else ""
 
     clear_screen()
-    console.print(f"[title]{sat["name"]}[/title] {badge} - Next 7 Days\n")
+    is_fav = config.is_favorite(sat["name"])
+    fav_badge = " [bold yellow]★ FAV[/bold yellow]" if is_fav else ""
+    console.print(f"[title]{sat["name"]}[/title] {badge}{fav_badge} - Next 7 Days\n")
     console.print(f"Location: {lat:.4f}, {lon:.4f}\n")
 
     if not passes:
@@ -1984,8 +2043,18 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
             color = "success" if p["visible"] else "muted"
             console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/{color}]")
 
-    console.print("\n[warning]Actions:[/warning]  [info]Enter[/info] - Back")
-    input("> ")
+    fav_text = "  [info]F[/info] - Unfavorite" if config.is_favorite(sat["name"]) else "  [info]F[/info] - Favorite"
+    console.print(f"\n[warning]Actions:[/warning]  [info]Enter[/info] - Back{fav_text}")
+    action = input("> ").strip().lower()
+    if action == "f":
+        if config.is_favorite(sat["name"]):
+            config.remove_favorite(sat["name"])
+            console.print("[green]Removed from favorites[/green]")
+        else:
+            config.add_favorite(sat["name"])
+            console.print("[green]Added to favorites[/green]")
+        time.sleep(0.5)
+        return show_satellite_detail(sat, lat, lon, alt)
 
 
 
