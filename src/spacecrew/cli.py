@@ -321,7 +321,6 @@ class Config:
         return satellite_name in self.get_favorites()
     
     def get(self, key: str, default=None):
-        # Check env var first (NASA_API_KEY)
         if key == "nasa_api_key":
             return os.getenv("NASA_API_KEY", self._config.get(key, default))
         return self._config.get(key, default)
@@ -366,7 +365,6 @@ class Cache:
                 if age_days <= ttl_days:
                     return json.loads(row["data"])
                 else:
-                    # Expired, delete
                     conn.execute("DELETE FROM cache WHERE key = ?", (key,))
                     conn.commit()
         return None
@@ -627,11 +625,9 @@ def fetch_apod_date(target_date: str | None):
     cache_key = target_date or "today"
     mem_key = f"apod:{cache_key}"
     
-    # Check memory cache first
     if mem_key in _apod_cache:
         return _apod_cache[mem_key]
     
-    # Check persistent cache
     cached = cache.get(mem_key, config.get("cache_ttl_days", 30))
     if cached:
         _apod_cache[mem_key] = cached
@@ -720,7 +716,6 @@ def show_apod_view(target_date: str | None = None):
             console.print("[green]Opened in browser[/green]")
             time.sleep(1)
         elif action == "p":
-            # Calculate previous day
             try:
                 current = datetime.fromisoformat(date) if date != "Unknown" else datetime.now()
             except ValueError:
@@ -762,11 +757,9 @@ def fetch_launches(limit: int = 15) -> list[dict]:
     global _launches_cache
     cache_key = f"launches:{limit}"
     
-    # Check memory cache first
     if _launches_cache is not None:
         return _launches_cache
     
-    # Check persistent cache
     cached = cache.get(cache_key, config.get("cache_ttl_days", 30))
     if cached:
         _launches_cache = cached
@@ -802,7 +795,6 @@ def fetch_iss_position() -> dict | None:
     if _iss_cache is not None:
         return _iss_cache
     
-    # In offline mode, ignore TTL and return any cached data
     ttl = 30 if _global_offline else 1/1440
     cached = cache.get("iss:position", ttl)
     if cached:
@@ -812,7 +804,6 @@ def fetch_iss_position() -> dict | None:
     if _global_offline:
         return None
     
-    # Try wheretheiss.at first (more accurate - real-time TLE calculation)
     try:
         res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=20, max_retries=2)
         if res and res.status_code == 200:
@@ -836,7 +827,6 @@ def fetch_iss_position() -> dict | None:
     except Exception:
         pass
     
-    # Fallback to open-notify
     try:
         res = fetch_with_retry("http://api.open-notify.org/iss-now.json", timeout=5)
         if res and res.status_code == 200:
@@ -864,35 +854,29 @@ def fetch_iss_position() -> dict | None:
 def get_location_name(lat: float, lon: float) -> str:
     """Get country/region name from coordinates using reverse geocoding."""
     try:
-        # Use a simple free API - OpenStreetMap Nominatim
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=3&addressdetails=1"
         headers = {"User-Agent": USER_AGENT}
         res = requests.get(url, headers=headers, timeout=5)
         if res and res.status_code == 200:
             data = res.json()
             address = data.get("address", {})
-            # Try to get country
             country = address.get("country")
             if country:
                 return country
-            # Check for ocean/sea
             for key in ["sea", "ocean", "water_body", "strait", "bay", "gulf"]:
                 if key in address:
                     return f"Over {address[key]}"
-            # Check for other geographic features
             for key in ["island", "archipelago", "continent"]:
                 if key in address:
                     return address[key]
     except Exception:
         pass
     
-    # Fallback: rough ocean detection
     if lat < -60:
         return "Over Southern Ocean / Antarctica"
     elif lat > 60:
         return "Over Arctic Ocean"
     elif -60 <= lat <= 60:
-        # Rough ocean detection by longitude
         if -180 <= lon <= -70 or 100 <= lon <= 180:
             return "Over Pacific Ocean"
         elif -70 < lon < 20:
@@ -915,7 +899,6 @@ def format_iss_position(data: dict) -> str:
     dt = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
     time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     
-    # Try to get location name
     location_name = "Unknown"
     try:
         lat_f = float(lat)
@@ -924,10 +907,8 @@ def format_iss_position(data: dict) -> str:
     except (ValueError, TypeError):
         pass
     
-    # Get extra data from WhereTheISS.at if available
     extra_info = ""
     if data.get("source") == "wheretheiss_at":
-        # We need to fetch fresh data for altitude/velocity
         try:
             res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=15, max_retries=1)
             if res and res.status_code == 200:
@@ -944,7 +925,6 @@ def format_iss_position(data: dict) -> str:
         except Exception:
             pass
     
-    # Google Maps link with red pin marker
     maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
     
     text = Text()
@@ -983,7 +963,6 @@ def fetch_space_weather(limit: int = 5) -> dict:
     
     result = {"flares": [], "cmes": [], "kp_index": [], "forecast": ""}
     
-    # Fetch recent solar flares (last 10 days)
     try:
         end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=10)
@@ -991,13 +970,11 @@ def fetch_space_weather(limit: int = 5) -> dict:
         res = fetch_with_retry(url, timeout=10)
         if res and res.status_code == 200:
             flares = res.json()
-            # Sort by peak time, most recent first
             flares.sort(key=lambda x: x.get("peakTime", ""), reverse=True)
             result["flares"] = flares[:limit]
     except Exception:
         pass
     
-    # Fetch recent CMEs (last 10 days)
     try:
         end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=10)
@@ -1010,18 +987,15 @@ def fetch_space_weather(limit: int = 5) -> dict:
     except Exception:
         pass
     
-    # Fetch planetary Kp index (last 24 hours)
     try:
         url = f"{NOAA_SWPC_BASE}/json/planetary_k_index_1m.json"
         res = fetch_with_retry(url, timeout=10)
         if res and res.status_code == 200:
             kp_data = res.json()
-            # Get last 24 entries (3-hour intervals)
             result["kp_index"] = kp_data[-24:] if len(kp_data) > 24 else kp_data
     except Exception:
         pass
     
-    # Fetch 3-day forecast text
     try:
         url = f"{NOAA_SWPC_BASE}/text/3-day-forecast.txt"
         res = fetch_with_retry(url, timeout=10)
@@ -1070,7 +1044,6 @@ def create_space_weather_table(data: dict) -> Table:
     table.add_column("Category", style="number", width=18, no_wrap=True)
     table.add_column("Details", style="text")
     
-    # Solar Flares
     flares = data.get("flares", [])
     if flares:
         flare_text = ""
@@ -1083,7 +1056,6 @@ def create_space_weather_table(data: dict) -> Table:
     else:
         table.add_row("Recent Flares", "[muted]No recent flares[/muted]")
     
-    # CMEs
     cmes = data.get("cmes", [])
     if cmes:
         cme_text = ""
@@ -1097,14 +1069,12 @@ def create_space_weather_table(data: dict) -> Table:
     else:
         table.add_row("Recent CMEs", "[muted]No recent CMEs[/muted]")
     
-    # Kp Index (current and max last 24h)
     kp_data = data.get("kp_index", [])
     if kp_data:
         current_kp = kp_data[-1].get("kp_index", 0) if kp_data else 0
         max_kp = max((d.get("kp_index", 0) for d in kp_data), default=0)
         table.add_row("Current Kp", format_kp_index(current_kp))
         table.add_row("Max Kp (24h)", format_kp_index(max_kp))
-        # Storm level
         if max_kp >= 5:
             storm = "[error]G1-G5 Storm[/error]"
         elif max_kp >= 4:
@@ -1133,10 +1103,8 @@ def show_space_weather():
         clear_screen()
         console.print(create_space_weather_table(data))
         
-        # Show forecast summary
         forecast = data.get("forecast", "")
         if forecast:
-            # Extract key lines
             lines = forecast.split("\n")
             key_lines = [l for l in lines if any(k in l.lower() for k in ["kp", "storm", "flare", "cme", "geomagnetic", "radiation", "g1", "g2", "g3", "g4", "g5"])]
             if key_lines:
@@ -1175,16 +1143,14 @@ CELESTRAK_TLE_URLS = {
     "other": "https://celestrak.org/NORAD/elements/gp.php?GROUP=other&FORMAT=tle",
 }
 
-# Satellite group mapping for simplified UI
 SATELLITE_GROUPS = {
     "ISS & Stations": ["iss", "stations"],
     "Starlink": ["starlink"],
     "Navigation": ["gps", "galileo", "beidou", "glonass"],
     "Science & Weather": ["weather", "science", "geo", "cubesat"],
-    "Other": ["iridium", "amateur", "military", "radar", "geo", "other"],
+    "Other": ["iridium", "amateur", "military", "radar", "other"],
 }
 
-# Reverse mapping: individual group -> display group
 SATELLITE_GROUP_MAP = {}
 for display_name, groups in SATELLITE_GROUPS.items():
     for g in groups:
@@ -1222,7 +1188,7 @@ def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list
                     line1 = lines[i + 1].strip()
                     line2 = lines[i + 2].strip()
                     if line1.startswith("1 ") and line2.startswith("2 "):
-                        satellites.append({"name": name, "line1": line1, "line2": line2})
+                        satellites.append({"name": name, "line1": line1, "line2": line2, "group": group})
             _tle_cache[group] = satellites
             cache.set(cache_key, satellites)
             return satellites
@@ -1232,6 +1198,21 @@ def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list
 
 
 _tle_cache: dict[str, list[dict]] = {}
+
+def cloud_emoji(pct: float) -> str:
+    """Return cloud emoji."""
+    return "☁️" if pct is not None else ""
+
+
+def azimuth_to_compass(az: float) -> str:
+    """Convert azimuth degrees to compass direction."""
+    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    idx = int((az + 11.25) / 22.5) % 16
+    return dirs[idx]
+
+
+
 
 
 def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: float, obs_alt: float, days: int = 3) -> list[dict]:
@@ -1245,7 +1226,6 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
     passes = []
     now = datetime.now(timezone.utc)
     
-    # Observer position in ECEF
     obs_lat_rad = radians(obs_lat)
     obs_lon_rad = radians(obs_lon)
     R_earth = 6371.0 + obs_alt / 1000.0  # km
@@ -1258,7 +1238,6 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
             sat = Satrec.twoline2rv(sat_data["line1"], sat_data["line2"])
             sat_name = sat_data["name"]
             
-            # Track pass state
             in_pass = False
             pass_start = None
             pass_max_el = 0
@@ -1267,7 +1246,6 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
             pass_start_az = 0
             pass_end_az = 0
             
-            # Check every minute for better accuracy
             for day_offset in range(days):
                 check_date = now + timedelta(days=day_offset)
                 for minute_offset in range(0, 1440, 1):  # every minute
@@ -1277,29 +1255,21 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                     if e != 0:
                         continue
                     
-                    # r is in TEME frame (km), convert to ECEF
-                    # TEME to ECEF rotation: rotate around Z by GAST
-                    # Greenwich Apparent Sidereal Time (simplified)
                     gast = (280.46061837 + 360.98564736629 * (jd - 2451545.0) + fr * 360.98564736629) % 360
                     gast_rad = radians(gast)
                     
-                    # Rotate TEME to ECEF (Z-axis rotation)
                     cos_g = cos(gast_rad)
                     sin_g = sin(gast_rad)
                     sat_x = r[0] * cos_g - r[1] * sin_g
                     sat_y = r[0] * sin_g + r[1] * cos_g
                     sat_z = r[2]
                     
-                    # Vector from observer to satellite
                     dx = sat_x - obs_x
                     dy = sat_y - obs_y
                     dz = sat_z - obs_z
                     
-                    # Range
                     range_km = sqrt(dx*dx + dy*dy + dz*dz)
                     
-                    # Convert to topocentric horizon coordinates
-                    # Local East, North, Up basis vectors
                     east_x = -sin(obs_lon_rad)
                     east_y = cos(obs_lon_rad)
                     east_z = 0
@@ -1312,20 +1282,16 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                     up_y = cos(obs_lat_rad) * sin(obs_lon_rad)
                     up_z = sin(obs_lat_rad)
                     
-                    # Project satellite vector onto local basis
                     east = dx * east_x + dy * east_y + dz * east_z
                     north = dx * north_x + dy * north_y + dz * north_z
                     up = dx * up_x + dy * up_y + dz * up_z
                     
-                    # Elevation and azimuth
                     horizontal_dist = sqrt(east*east + north*north)
                     elevation = degrees(atan2(up, horizontal_dist))
                     azimuth = degrees(atan2(east, north)) % 360
                     
-                    # Sun position (simplified)
                     sun_el, sun_az = calculate_sun_position(check_time, obs_lat, obs_lon)
                     
-                    # Check visibility: satellite above 10°, sun below -6° (civil twilight), satellite illuminated
                     sat_illuminated = is_satellite_illuminated(r, check_time)
                     ground_dark = sun_el < -6
                     above_horizon = elevation > 10
@@ -1333,7 +1299,6 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                     visible = above_horizon and ground_dark and sat_illuminated
                     
                     if visible and not in_pass:
-                        # Pass start
                         in_pass = True
                         pass_start = check_time
                         pass_max_el = elevation
@@ -1341,22 +1306,18 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                         pass_max_pos = r  # store TEME position at max
                         pass_start_az = azimuth
                     elif visible and in_pass:
-                        # Continue pass, track max elevation
                         if elevation > pass_max_el:
                             pass_max_el = elevation
                             pass_max_time = check_time
                             pass_max_pos = r  # update TEME position at max
                     elif not visible and in_pass:
-                        # Pass end
                         in_pass = False
                         pass_end_az = azimuth
                         if pass_start and pass_max_el > 15:  # Only keep passes with decent max elevation
                             duration = (check_time - pass_start).total_seconds() / 60
                             if duration > 1:  # At least 1 minute
-                                # Calculate magnitude at max elevation
                                 std_mag = get_std_magnitude(sat_name)
                                 
-                                # Convert max_pos from TEME to ECEF
                                 jd_max, fr_max = jday(pass_max_time.year, pass_max_time.month, pass_max_time.day, pass_max_time.hour, pass_max_time.minute, pass_max_time.second)
                                 gast_max = (280.46061837 + 360.98564736629 * (jd_max - 2451545.0) + fr_max * 360.98564736629) % 360
                                 gast_max_rad = radians(gast_max)
@@ -1366,14 +1327,11 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                 sat_y = pass_max_pos[0] * sin_g + pass_max_pos[1] * cos_g
                                 sat_z = pass_max_pos[2]
                                 
-                                # Range at max elevation
                                 dx = sat_x - obs_x
                                 dy = sat_y - obs_y
                                 dz = sat_z - obs_z
                                 range_km = sqrt(dx*dx + dy*dy + dz*dz)
                                 
-                                # Calculate phase angle
-                                # Sun position vector
                                 sun_el, sun_az = calculate_sun_position(pass_max_time, obs_lat, obs_lon)
                                 n_sun = pass_max_time.timestamp() / 86400 + 2440587.5 - 2451545.0
                                 L_sun = radians(280.460 + 0.9856474 * n_sun)
@@ -1386,7 +1344,6 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                 sun_y = sin(ra_sun) * cos(dec_sun)
                                 sun_z = sin(dec_sun)
                                 
-                                # Phase angle
                                 sat_dist = sqrt(sat_x**2 + sat_y**2 + sat_z**2)
                                 to_sun_x = sun_x * sat_dist - sat_x
                                 to_sun_y = sun_y * sat_dist - sat_y
@@ -1411,22 +1368,16 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                 else:
                                     phase_angle = 0.0
                                 
-                                # Calculate magnitude
                                 magnitude = calculate_magnitude(std_mag, range_km, phase_angle)
                                 
-                                # Calculate rarity
                                 rarity = get_rarity_bonus(sat_name)
                                 
-                                # Sun elevation at max time
                                 sun_el_max, _ = calculate_sun_position(pass_max_time, obs_lat, obs_lon)
                                 
-                                # Quality score
                                 quality = calculate_pass_quality(pass_max_el, duration, sun_el_max, magnitude, rarity)
                                 
-                                # Get cloud cover for this pass
                                 cloud_pct = get_cloud_cover(obs_lat, obs_lon, pass_max_time)
                                 
-                                # Get moon phase for night passes only
                                 sun_el_max, _ = calculate_sun_position(pass_max_time, obs_lat, obs_lon)
                                 moon_data = None
                                 if sun_el_max < -6:  # Night pass
@@ -1459,32 +1410,23 @@ def calculate_sun_position(time: datetime, lat: float, lon: float) -> tuple[floa
     """Calculate sun elevation and azimuth (simplified)."""
     from math import radians, degrees, sin, cos, tan, atan2, asin
     
-    # Days since J2000
     jd = time.timestamp() / 86400 + 2440587.5
     n = jd - 2451545.0
     
-    # Mean longitude of sun
     L = radians(280.460 + 0.9856474 * n)
-    # Mean anomaly
     g = radians(357.528 + 0.9856003 * n)
-    # Ecliptic longitude
     lambda_sun = L + radians(1.915) * sin(g) + radians(0.020) * sin(2*g)
-    # Obliquity of ecliptic
     epsilon = radians(23.439 - 0.0000004 * n)
     
-    # Right ascension and declination
     ra = atan2(cos(epsilon) * sin(lambda_sun), cos(lambda_sun))
     dec = asin(sin(epsilon) * sin(lambda_sun))
     
-    # Greenwich hour angle
     gmst = 6.697375 + 0.0657098242 * n + time.hour + time.minute/60 + time.second/3600
     lmst = gmst + lon/15
     ha = radians(lmst * 15 - degrees(ra))
     
     lat_rad = radians(lat)
-    # Elevation
     el = asin(sin(dec) * sin(lat_rad) + cos(dec) * cos(lat_rad) * cos(ha))
-    # Azimuth
     az = atan2(-sin(ha), tan(dec) * cos(lat_rad) - sin(lat_rad) * cos(ha))
     
     return degrees(el), degrees(az) % 360
@@ -1493,11 +1435,9 @@ def calculate_sun_position(time: datetime, lat: float, lon: float) -> tuple[floa
 def is_satellite_illuminated(sat_pos, time: datetime) -> bool:
     """Check if satellite is illuminated by sun (simplified)."""
     from math import sqrt, radians, sin, cos, atan2, asin
-    # Sun direction vector (unit vector from Earth to sun)
     sat_x, sat_y, sat_z = sat_pos
     sat_dist = sqrt(sat_x*sat_x + sat_y*sat_y + sat_z*sat_z)
     
-    # Sun direction vector (unit vector from Earth to sun)
     n = time.timestamp() / 86400 + 2440587.5 - 2451545.0
     L = radians(280.460 + 0.9856474 * n)
     g = radians(357.528 + 0.9856003 * n)
@@ -1510,16 +1450,11 @@ def is_satellite_illuminated(sat_pos, time: datetime) -> bool:
     sun_y = sin(ra) * cos(dec)
     sun_z = sin(dec)
     
-    # Satellite position vector from Earth center
     dot = sat_x * sun_x + sat_y * sun_y + sat_z * sun_z
     
-    # Satellite is illuminated if not in Earth's umbra
-    # Umbra condition: dot(R, S) < -R_earth (satellite behind Earth, within shadow cone)
-    # R_earth = 6371 km
     return dot > -6371
 
 
-# Standard magnitudes at 1000km, 90° phase (from satellite catalogs)
 SAT_STD_MAGNITUDES = {
     "ISS": -1.3,
     "ZARYA": -1.3,
@@ -1570,12 +1505,7 @@ def get_std_magnitude(name: str) -> float:
 def calculate_magnitude(std_mag: float, range_km: float, phase_angle_deg: float) -> float:
     """Calculate apparent magnitude from standard magnitude, range, and phase angle."""
     from math import log10, cos, radians
-    # Range correction: 5 * log10(range / 1000)
     range_corr = 5.0 * log10(range_km / 1000.0)
-    # Phase correction: -2.5 * log10((1 + cos(phase)) / 2)
-    # At 0° phase (fully lit): correction = 0
-    # At 90° phase (half lit): correction = 0.75
-    # At 180° phase (dark): correction -> large (satellite in shadow)
     if phase_angle_deg >= 170:
         return 99.0  # effectively invisible (in shadow)
     phase_rad = radians(phase_angle_deg)
@@ -1590,17 +1520,14 @@ def calculate_phase_angle(sat_pos, sun_pos, obs_pos) -> float:
     sun_x, sun_y, sun_z = sun_pos
     obs_x, obs_y, obs_z = obs_pos
     
-    # Vector from satellite to sun
     to_sun_x = sun_x - sat_x
     to_sun_y = sun_y - sat_y
     to_sun_z = sun_z - sat_z
     
-    # Vector from satellite to observer
     to_obs_x = obs_x - sat_x
     to_obs_y = obs_y - sat_y
     to_obs_z = obs_z - sat_z
     
-    # Normalize
     sun_dist = sqrt(to_sun_x**2 + to_sun_y**2 + to_sun_z**2)
     obs_dist = sqrt(to_obs_x**2 + to_obs_y**2 + to_obs_z**2)
     
@@ -1614,7 +1541,6 @@ def calculate_phase_angle(sat_pos, sun_pos, obs_pos) -> float:
     to_obs_y /= obs_dist
     to_obs_z /= obs_dist
     
-    # Dot product for angle
     dot = to_sun_x * to_obs_x + to_sun_y * to_obs_y + to_sun_z * to_obs_z
     dot = max(-1.0, min(1.0, dot))
     return degrees(acos(dot))
@@ -1622,13 +1548,11 @@ def calculate_phase_angle(sat_pos, sun_pos, obs_pos) -> float:
 
 def calculate_pass_quality(elevation: float, duration: float, sun_el: float, magnitude: float, rarity: float = 1.0) -> int:
     """Calculate pass quality score 0-100."""
-    # Normalize each component to 0-1
     elev_score = min(1.0, max(0.0, (elevation - 10) / 80))  # 10°->0, 90°->1
     dur_score = min(1.0, max(0.0, (duration - 1) / 9))       # 1min->0, 10min->1
     dark_score = min(1.0, max(0.0, (-sun_el - 6) / 12))      # sun -6°->0, -18°->1
     mag_score = min(1.0, max(0.0, (6.5 - magnitude) / 10))   # mag +6.5->0, -3.5->1
     
-    # Weighted combination
     score = (
         0.30 * elev_score +
         0.20 * dur_score +
@@ -1657,7 +1581,6 @@ def show_satellite_passes():
     """Show satellite passes menu and predictions."""
     from rich.prompt import Prompt
     
-    # Get or set observer location
     lat = config.get("observer_lat")
     lon = config.get("observer_lon")
     alt = config.get("observer_alt", 0)
@@ -1715,7 +1638,6 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
     """Predict passes for all tracked satellites."""
     from rich.prompt import Prompt
     
-    # Define satellite groups for filtering
     GROUP_OPTIONS = {
         "1": {"name": "ISS & Stations", "groups": ["iss", "stations"]},
         "2": {"name": "Starlink", "groups": ["starlink"]},
@@ -1735,16 +1657,12 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
             mag = p['magnitude']
             max_el = p['max_elevation']
             dur = p['duration']
-            # Tier 1: Best - very bright, high elevation, long duration
             if mag < 2 and max_el > 45 and p['duration'] > 5:
                 best.append(p)
-            # Tier 2: Good - bright, decent elevation, decent duration
             elif mag < 4 and max_el > 25 and p['duration'] > 2:
                 good.append(p)
-            # Tier 3: OK - visible but not great
             elif mag < 5.5 and max_el > 15 and p['duration'] > 1:
                 ok.append(p)
-        # Return best first, then good, then ok
         return best + good + ok
     
     while True:
@@ -1768,7 +1686,6 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                 pass
             continue
         elif choice == "4":
-            # Filter by type
             while True:
                 clear_screen()
                 console.print("[title]Filter by Type[/title]")
@@ -1787,7 +1704,6 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                 else:
                     continue
         elif choice == "5":
-            # Favorites mode - only show favorited satellites
             favorites = config.get_favorites()
             if not favorites:
                 console.print("[yellow]No favorites saved. Add satellites from detail view.[/yellow]")
@@ -1803,12 +1719,9 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         
         clear_screen()
         
-        # Determine groups based on filter selection
         if 'selected_groups' in locals():
             groups = selected_groups
         elif mode == "best":
-            # For "best" mode, only load groups with bright satellites
-            # Starlink satellites are typically mag 5-6, too dim for "best" tier
             groups = ["iss", "stations"]
         else:
             groups = ["stations", "starlink", "iridium", "gps", "geo", "weather", "science", "amateur", "military", "radar", "cubesat", "other"]
@@ -1844,7 +1757,6 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         
         passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
         
-        # Filter by favorites if favorites mode was selected
         if 'f_choice' in locals() and f_choice == "fav":
             favorites = config.get_favorites()
             passes = [p for p in passes if p['name'] in favorites]
@@ -1857,13 +1769,11 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
             input("\nPress Enter to return...")
             continue
         
-        # Group by satellite
         from collections import defaultdict
         passes_by_sat = defaultdict(list)
         for p in passes:
             passes_by_sat[p["name"]].append(p)
         
-        # Sort by first pass time
         sorted_sats = sorted(passes_by_sat.items(), key=lambda x: x[1][0]["start"])
         
         clear_screen()
@@ -1881,26 +1791,28 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                 continue
             console.print(f"  [number]{i+1}[/number] [highlight]{name}[/highlight]")
             for p in sat_passes[:5]:
-                start_str = p["start"].strftime("%m-%d %H:%M UTC")
+                start_str = p["start"].strftime("%m-%d %H:%M")
                 end_str = p["end"].strftime("%H:%M")
                 max_el = p["max_elevation"]
-                dir_str = f"{p['start_azimuth']:.0f}°→{p['end_azimuth']:.0f}°"
+                start_az = p['start_azimuth']
+                end_az = p['end_azimuth']
+                dir_str = f"{start_az:.0f}°{azimuth_to_compass(start_az)}→{end_az:.0f}°{azimuth_to_compass(end_az)}"
                 dur = int(p["duration"])
                 mag = p.get("magnitude", 99)
                 quality = p.get("quality", 0)
                 cloud_pct = p.get("cloud_cover")
                 moon_data = p.get("moon_phase")
+                
                 mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
                 qual_str = f"  Q{quality}" if quality > 0 else ""
-                cloud_str = f" CLOUD {cloud_pct}%" if cloud_pct is not None else ""
+                cloud_str = f"  {cloud_emoji(cloud_pct)}{cloud_pct:.0f}%" if cloud_pct is not None else ""
                 moon_str = ""
                 if moon_data:
-                    phase = moon_data['phase_name']
                     illum = moon_data['illumination_pct']
-                    moon_str = f" MOON {phase} {illum:.0f}%"
+                    moon_str = f"  Moon {illum:.0f}%"
                 visible = "✓" if p["visible"] else "✗"
                 color = "success" if p["visible"] else "muted"
-                console.print(f"  [green]{p['start'].strftime('%m-%d %H:%M')}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/green]")
+                console.print(f"  [green]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/green]")
         
         console.print("\n[warning]Actions:[/warning]  [number]1-{}[/number] - Select satellite  [info]r[/info] - Recalculate  [info]f[/info] - Filter  [info]Enter[/info] - Back".format(len(sorted_sats)))
         action = input("> ").strip().lower()
@@ -1911,12 +1823,10 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         elif action == "f":
             continue
         else:
-            # Try to select satellite by number
             try:
                 idx = int(action) - 1
                 if 0 <= idx < len(sorted_sats):
                     sat_name = sorted_sats[idx][0]
-                    # Find the original satellite object with TLE data
                     for s in all_satellites:
                         if s["name"] == sat_name:
                             show_satellite_detail(s, lat, lon, alt)
@@ -1931,10 +1841,8 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
         clear_screen()
         console.print("[title]Specific Satellite Prediction[/title]")
         
-        # Search directly across all groups
         search = Prompt.ask("Search satellite name (or press Enter to browse all)", default="").strip().lower()
         
-        # Fetch all satellites from all groups
         all_satellites = []
         for group in CELESTRAK_TLE_URLS.keys():
             sats = fetch_tle_data(group)
@@ -1946,7 +1854,6 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
             input("\nPress Enter to return...")
             return
         
-        # Filter by search
         if search:
             filtered = [s for s in all_satellites if search in s["name"].lower()]
         else:
@@ -1957,7 +1864,6 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
             time.sleep(1)
             continue
         
-        # Show results with pagination
         page_size = 20
         total_pages = (len(filtered) + page_size - 1) // page_size
         page = 0
@@ -1998,7 +1904,6 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
         
         if action == "s":
             continue  # Re-search
-        # If action is empty, loop continues to group selection
 def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
     """Show detailed passes for a specific satellite."""
     clear_screen()
@@ -2008,7 +1913,6 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
 
     clear_screen()
 
-    # Get satellite type badge
     sat_group = SATELLITE_GROUP_MAP.get(sat.get('group', ''), 'Other')
     badge = f"[{sat_group}]" if sat_group else ""
 
@@ -2022,23 +1926,25 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
         console.print("[warning]No visible passes in the next 7 days[/warning]")
     else:
         for p in passes[:10]:
-            start_str = p["start"].strftime("%m-%d %H:%M UTC")
+            start_str = p["start"].strftime("%m-%d %H:%M")
             end_str = p["end"].strftime("%H:%M")
             max_el = p["max_elevation"]
-            dir_str = f"{p['start_azimuth']:.0f}°→{p['end_azimuth']:.0f}°"
+            start_az = p['start_azimuth']
+            end_az = p['end_azimuth']
+            dir_str = f"{start_az:.0f}°{azimuth_to_compass(start_az)}→{end_az:.0f}°{azimuth_to_compass(end_az)}"
             dur = int(p["duration"])
             mag = p.get("magnitude", 99)
             quality = p.get("quality", 0)
             cloud_pct = p.get("cloud_cover")
             moon_data = p.get("moon_phase")
+            
             mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
             qual_str = f"  Q{quality}" if quality > 0 else ""
-            cloud_str = f" CLOUD {cloud_pct}%" if cloud_pct is not None else ""
+            cloud_str = f"  {cloud_emoji(cloud_pct)}{cloud_pct:.0f}%" if cloud_pct is not None else ""
             moon_str = ""
             if moon_data:
-                phase = moon_data['phase_name']
                 illum = moon_data['illumination_pct']
-                moon_str = f" MOON {phase} {illum:.0f}%"
+                moon_str = f"  Moon {illum:.0f}%"
             visible = "✓" if p["visible"] else "✗"
             color = "success" if p["visible"] else "muted"
             console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/{color}]")
@@ -2194,7 +2100,6 @@ def create_launches_panel_list(launches: list[dict]) -> list:
         status_id = launch.get("status", {}).get("id", 0)
         countdown = get_launch_countdown(launch.get("window_start", ""))
 
-        # Color based on status
         if status_id == 1:
             status_style = "success"
         elif status_id == 2:
@@ -2227,40 +2132,33 @@ def create_launch_detail_table(launch: dict) -> Table:
     table.add_column("Property", style="number", width=22, no_wrap=True)
     table.add_column("Value", style="text")
 
-    # Basic info
     table.add_row("Mission", launch.get("name", "N/A"))
     desc = launch.get("description", "N/A")
     if desc and len(desc) > 300:
         desc = desc[:300] + "..."
     table.add_row("Description", desc)
 
-    # Rocket
     rocket = launch.get("rocket", {}).get("configuration", {})
     table.add_row("Rocket", rocket.get("name", "N/A"))
     table.add_row("Rocket Family", rocket.get("family", "N/A"))
     table.add_row("Variant", rocket.get("variant", "N/A"))
 
-    # Provider
     provider = launch.get("launch_service_provider", {})
     table.add_row("Provider", provider.get("name", "N/A"))
     table.add_row("Provider Type", provider.get("type", "N/A"))
 
-    # Pad & Location
     pad = launch.get("pad", {})
     table.add_row("Launch Pad", pad.get("name", "N/A"))
     location = pad.get("location", {})
     table.add_row("Location", f"{location.get('name', 'N/A')}, {location.get('country_code', 'N/A')}")
 
-    # Times
     table.add_row("Window Start", format_launch_datetime(launch.get("window_start", "")))
     table.add_row("Window End", format_launch_datetime(launch.get("window_end", "")))
 
-    # Status
     status = launch.get("status", {})
     table.add_row("Status", status.get("name", "N/A"))
     table.add_row("Status Description", status.get("description", "N/A"))
 
-    # Links
     has_links = False
     if launch.get("webcast_live") and launch.get("streams"):
         streams = launch.get("streams", [])
@@ -2280,7 +2178,6 @@ def create_launch_detail_table(launch: dict) -> Table:
         table.add_row("Wikipedia", f"[link={launch.get('wiki_url')}]Open[/link]")
         has_links = True
 
-    # Image
     if launch.get("image"):
         table.add_row("Mission Patch", f"[link={launch.get('image')}]View Image[/link]")
         has_links = True
@@ -2354,7 +2251,6 @@ def show_dashboard():
     import sys
     import select
     
-    # Get observer location
     lat = config.get("observer_lat")
     lon = config.get("observer_lon")
     alt = config.get("observer_alt", 0)
@@ -2390,13 +2286,11 @@ def show_dashboard():
     def build_dashboard():
         now = datetime.now(timezone.utc)
         
-        # Header
         header_text = Text()
         header_text.append(" SPACECREW DASHBOARD", style="highlight")
         header_text.append(f"  {now.strftime('%Y-%m-%d %H:%M:%S UTC')}", style="muted")
         layout["header"].update(Align.center(header_text))
         
-        # ISS Panel
         iss_data = fetch_iss_position()
         if iss_data and iss_data.get("iss_position"):
             pos = iss_data["iss_position"]
@@ -2409,7 +2303,6 @@ def show_dashboard():
         else:
             layout["iss"].update(Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="white"))
         
-        # Tiangong Panel
         tg_data = fetch_iss_position()
         if tg_data and tg_data.get("iss_position"):
             pos = tg_data["iss_position"]
@@ -2422,7 +2315,6 @@ def show_dashboard():
         else:
             layout["tiangong"].update(Panel("[error]Tiangong data unavailable[/error]", title="[info]Tiangong[/info]", border_style="white"))
         
-        # Next passes (top 5)
         passes_text = Text()
         passes_text.append(" NEXT PASSES (24h)\n", style="title")
         try:
@@ -2456,7 +2348,6 @@ def show_dashboard():
             passes_text.append(" Error calculating passes\n", style="error")
         layout["passes"].update(Panel(passes_text, title="[info]Passes[/info]", border_style="white", padding=(0, 1)))
         
-        # Space Weather
         weather_data = fetch_space_weather()
         weather_text = Text()
         weather_text.append(" SPACE WEATHER\n", style="title")
@@ -2477,7 +2368,6 @@ def show_dashboard():
             weather_text.append(" No data", style="muted")
         layout["weather"].update(Panel(weather_text, title="[info]Weather[/info]", border_style="white"))
         
-        # People in Space
         people_data = fetch_space_data()
         people_text = Text()
         people_text.append(" PEOPLE IN SPACE\n", style="title")
@@ -2490,7 +2380,6 @@ def show_dashboard():
             people_text.append(" No data", style="muted")
         layout["people"].update(Panel(people_text, title="[info]People[/info]", border_style="white"))
         
-        # Upcoming Launches
         launches_data = fetch_launches()
         launches_text = Text()
         launches_text.append(" NEXT LAUNCHES\n", style="title")
@@ -2507,7 +2396,6 @@ def show_dashboard():
             launches_text.append(" No data", style="muted")
         layout["launches"].update(Panel(launches_text, title="[info]Launches[/info]", border_style="white"))
         
-        # APOD
         apod_data = fetch_apod_date(None)
         apod_text = Text()
         apod_text.append(" APOD TODAY\n", style="title")
@@ -2520,29 +2408,22 @@ def show_dashboard():
             apod_text.append(" No data", style="muted")
         layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="white"))
         
-        # Footer
         footer_text = Text.from_markup("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  [info]:[/info] Command  ")
         footer_text.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
         layout["footer"].update(Align.center(footer_text))
         
         return layout
     
-    # Initial build
-    # Simple input loop like other modes
-    # Simple input loop like other modes
-    # Simple input loop - only Enter to go back
     while True:
         clear_screen()
         layout = build_dashboard()
         
-        # Render the full layout (proper grid)
         console.print(layout)
         
         choice = input("> ").strip().lower()
         
         if not choice:
             break  # Enter = back
-        # Any other input ignored, only Enter works
     
     clear_screen()
 
@@ -2692,7 +2573,6 @@ def main():
     global _global_offline
     args = parse_args()
     
-    # Handle completion generation
     if getattr(args, 'generate_completion', None):
         shell = args.generate_completion
         if shell == "bash":
@@ -2716,7 +2596,6 @@ def main():
         console.print("[green]Cache cleared[/green]")
         return
     
-    # Direct mode handling
     if args.mode:
         if args.mode == "dashboard":
             show_dashboard()
