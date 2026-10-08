@@ -1385,6 +1385,7 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                 
                                 passes.append({
                                     "name": sat_name,
+                                    "group": sat_data.get("group", ""),
                                     "start": pass_start,
                                     "end": check_time,
                                     "max_elevation": pass_max_el,
@@ -1786,34 +1787,10 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         total_passes = sum(len(v) for v in passes_by_sat.values())
         console.print(f"[muted]{len(passes_by_sat)} satellites, {total_passes} total passes[/muted]\n")
         
-        for i, (name, sat_passes) in enumerate(sorted_sats):
-            if not sat_passes:
-                continue
-            console.print(f"  [number]{i+1}[/number] [highlight]{name}[/highlight]")
-            for p in sat_passes[:5]:
-                start_str = p["start"].strftime("%m-%d %H:%M")
-                end_str = p["end"].strftime("%H:%M")
-                max_el = p["max_elevation"]
-                start_az = p['start_azimuth']
-                end_az = p['end_azimuth']
-                dir_str = f"{start_az:.0f}°{azimuth_to_compass(start_az)}→{end_az:.0f}°{azimuth_to_compass(end_az)}"
-                dur = int(p["duration"])
-                mag = p.get("magnitude", 99)
-                quality = p.get("quality", 0)
-                cloud_pct = p.get("cloud_cover")
-                moon_data = p.get("moon_phase")
-                
-                mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
-                qual_str = f"  Q{quality}" if quality > 0 else ""
-                cloud_str = f"  {cloud_emoji(cloud_pct)}{cloud_pct:.0f}%" if cloud_pct is not None else ""
-                moon_str = ""
-                if moon_data:
-                    illum = moon_data['illumination_pct']
-                    moon_str = f"  Moon {illum:.0f}%"
-                visible = "✓" if p["visible"] else "✗"
-                color = "success" if p["visible"] else "muted"
-                console.print(f"  [green]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/green]")
-        
+        panels = create_passes_panel_list(sorted_sats, max_passes_per_sat=3)
+        for panel in panels:
+            console.print(panel)
+
         console.print("\n[warning]Actions:[/warning]  [number]1-{}[/number] - Select satellite  [info]r[/info] - Recalculate  [info]f[/info] - Filter  [info]Enter[/info] - Back".format(len(sorted_sats)))
         action = input("> ").strip().lower()
         if not action:
@@ -2125,6 +2102,79 @@ def create_launches_panel_list(launches: list[dict]) -> list:
 
     return panels
 
+
+def create_passes_panel_list(sorted_sats: list, max_passes_per_sat: int = 3) -> list:
+    """Create a list of Panels for each satellite with its passes - cleaner panel layout."""
+    from rich.panel import Panel
+    from rich.text import Text
+
+    panels = []
+    for idx, (name, sat_passes) in enumerate(sorted_sats, 1):
+        if not sat_passes:
+            continue
+
+        group = sat_passes[0].get("group", "")
+        group_display = SATELLITE_GROUP_MAP.get(group, "Other")
+
+        is_fav = config.is_favorite(name)
+        fav_badge = " [FAV]" if is_fav else ""
+
+        first_pass = sat_passes[0]
+        mag = first_pass.get("magnitude", 99)
+        max_el = first_pass.get("max_elevation", 0)
+        dur = first_pass.get("duration", 0)
+
+        if mag < 2 and max_el > 45 and dur > 5:
+            border_style = "yellow"
+        elif mag < 4 and max_el > 25 and dur > 2:
+            border_style = "green"
+        elif mag < 5.5 and max_el > 15 and dur > 1:
+            border_style = "cyan"
+        else:
+            border_style = "white"
+
+        text = Text()
+        text.append(f"{idx}. ", style="number")
+        text.append(f"{name}", style="highlight")
+        group_text = f" [{group_display}]{fav_badge}"
+        text.append(group_text + "\n", style="muted")
+
+        for i, p in enumerate(sat_passes[:max_passes_per_sat]):
+            start_str = p["start"].strftime("%m-%d %H:%M")
+            end_str = p["end"].strftime("%H:%M")
+            max_el = p["max_elevation"]
+            start_az = p["start_azimuth"]
+            end_az = p["end_azimuth"]
+            dir_str = f"{start_az:.0f}°{azimuth_to_compass(start_az)}->{end_az:.0f}°{azimuth_to_compass(end_az)}"
+            dur = int(p["duration"])
+            mag = p.get("magnitude", 99)
+            quality = p.get("quality", 0)
+            cloud_pct = p.get("cloud_cover")
+            moon_data = p.get("moon_phase")
+
+            mag_str = f" mag {mag:.1f}" if mag < 99 else ""
+            qual_str = f" Q{quality}" if quality > 0 else ""
+            cloud_str = f" cloud {cloud_pct:.0f}%" if cloud_pct is not None else ""
+            moon_str = ""
+            if moon_data:
+                illum = moon_data["illumination_pct"]
+                moon_str = f" moon {illum:.0f}%"
+            visible = " VISIBLE" if p["visible"] else " --"
+            color = "success" if p["visible"] else "muted"
+
+            line = f"    {start_str}-{end_str}  max {max_el:.0f}deg  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}{visible}"
+            text.append(line, style=color)
+            if i < min(len(sat_passes), max_passes_per_sat) - 1:
+                text.append("\n")
+
+        if len(sat_passes) > max_passes_per_sat:
+            text.append("\n")
+            more = f"    ... and {len(sat_passes) - max_passes_per_sat} more passes"
+            text.append(more, style="muted")
+
+        panels.append(Panel(text, border_style=border_style, padding=(0, 1)))
+
+    return panels
 
 def create_launch_detail_table(launch: dict) -> Table:
     """Create detailed table for a single launch."""
