@@ -171,6 +171,24 @@ THEMES = {
         "date": "#c8c093",
         "status": "#6a9589",
     }),
+    "dracula": Theme({
+        "info": "#8be9fd",
+        "warning": "#f1fa8c",
+        "error": "#ff5555",
+        "success": "#50fa7b",
+        "muted": "#6272a4",
+        "highlight": "#f8f8f2",
+        "title": "#bd93f9",
+        "border": "#44475a",
+        "text": "#f8f8f2",
+        "number": "#8be9fd",
+        "name": "#f8f8f2",
+        "country": "#50fa7b",
+        "rocket": "#ffb86c",
+        "provider": "#ff79c6",
+        "date": "#f8f8f2",
+        "status": "#8be9fd",
+    }),
     "catppuccin-latte": Theme({
         "info": "#1e66f5",
         "warning": "#df8e1d",
@@ -1890,41 +1908,103 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
 
     clear_screen()
 
-    sat_group = SATELLITE_GROUP_MAP.get(sat.get('group', ''), 'Other')
-    badge = f"[{sat_group}]" if sat_group else ""
+    sat_group = SATELLITE_GROUP_MAP.get(sat.get("group", ""), "Other")
+    group_display = sat_group if sat_group else "Other"
 
-    clear_screen()
     is_fav = config.is_favorite(sat["name"])
-    fav_badge = " [bold yellow]★ FAV[/bold yellow]" if is_fav else ""
-    console.print(f"[title]{sat["name"]}[/title] {badge}{fav_badge} - Next 7 Days\n")
-    console.print(f"Location: {lat:.4f}, {lon:.4f}\n")
+    fav_badge = " [FAV]" if is_fav else ""
+
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    header = Text()
+    header.append(f"{sat["name"]} ", style="highlight")
+    header.append(f"[{group_display}]{fav_badge}", style="muted")
+
+    console.print(Panel(header, border_style="dim", padding=(0, 1)))
+    console.print(f"[dim]Location: {lat:.4f}, {lon:.4f}  \u2022  Next 7 Days[/dim]\n")
 
     if not passes:
-        console.print("[warning]No visible passes in the next 7 days[/warning]")
+        console.print(Panel("[warning]No visible passes in the next 7 days[/warning]", border_style="dim"))
     else:
-        for p in passes[:10]:
+        next_pass = passes[0]
+        start_str = next_pass["start"].strftime("%m-%d %H:%M")
+        end_str = next_pass["end"].strftime("%H:%M")
+        max_el = next_pass["max_elevation"]
+        start_az = next_pass["start_azimuth"]
+        end_az = next_pass["end_azimuth"]
+        dir_str = f"{start_az:.0f}\u00b0{azimuth_to_compass(start_az)}\u2192{end_az:.0f}\u00b0{azimuth_to_compass(end_az)}"
+        dur = int(next_pass["duration"])
+        mag = next_pass.get("magnitude", 99)
+        quality = next_pass.get("quality", 0)
+        cloud_pct = next_pass.get("cloud_cover")
+        moon_data = next_pass.get("moon_phase")
+
+        mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
+        qual_str = f"  Q{quality}" if quality > 0 else ""
+        cloud_str = f"  cloud {cloud_pct:.0f}%" if cloud_pct is not None else ""
+        moon_str = ""
+        if moon_data:
+            illum = moon_data["illumination_pct"]
+            moon_str = f"  moon {illum:.0f}%"
+        visible = " VISIBLE" if next_pass["visible"] else " --"
+
+        next_text = Text()
+        next_text.append("NEXT PASS  ", style="bold")
+        next_text.append("\n")
+        next_text.append(f"{start_str}-{end_str}  max {max_el:.0f}\u00b0  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}{visible}\n")
+        next_text.append(f"{len(passes)} total passes in 7 days", style="muted")
+
+        console.print(Panel(next_text, border_style="dim", padding=(0, 1)))
+        console.print()
+
+        table = Table(show_header=True, header_style="bold", border_style="dim", expand=True, pad_edge=False)
+        table.add_column("Date", style="cyan", width=12, no_wrap=True)
+        table.add_column("Time", style="white", width=16, no_wrap=True)
+        table.add_column("Max El", style="magenta", width=8, justify="right")
+        table.add_column("Direction", style="white", width=18, no_wrap=True)
+        table.add_column("Dur", style="cyan", width=6, justify="right")
+        table.add_column("Mag", style="green", width=8, justify="right")
+        table.add_column("Q", style="yellow", width=4, justify="right")
+        table.add_column("Cloud", style="dim", width=12, justify="right")
+        table.add_column("Moon", style="dim", width=10, justify="right")
+        table.add_column("Vis", style="green", width=8, justify="center")
+
+        for p in passes[:15]:
             start_str = p["start"].strftime("%m-%d %H:%M")
             end_str = p["end"].strftime("%H:%M")
             max_el = p["max_elevation"]
-            start_az = p['start_azimuth']
-            end_az = p['end_azimuth']
-            dir_str = f"{start_az:.0f}°{azimuth_to_compass(start_az)}→{end_az:.0f}°{azimuth_to_compass(end_az)}"
+            start_az = p["start_azimuth"]
+            end_az = p["end_azimuth"]
+            dir_str = f"{start_az:.0f}\u00b0{azimuth_to_compass(start_az)}\u2192{end_az:.0f}\u00b0{azimuth_to_compass(end_az)}"
             dur = int(p["duration"])
             mag = p.get("magnitude", 99)
             quality = p.get("quality", 0)
             cloud_pct = p.get("cloud_cover")
             moon_data = p.get("moon_phase")
-            
-            mag_str = f"  mag {mag:.1f}" if mag < 99 else ""
-            qual_str = f"  Q{quality}" if quality > 0 else ""
-            cloud_str = f"  {cloud_emoji(cloud_pct)}{cloud_pct:.0f}%" if cloud_pct is not None else ""
-            moon_str = ""
+
+            date_str = p["start"].strftime("%m-%d")
+            time_str = f"{start_str[-5:]}-{end_str[-5:]}"
+
+            mag_display = f"{mag:.1f}" if mag < 99 else "\u2014"
+            cloud_display = f"cloud {cloud_pct:.0f}%" if cloud_pct is not None else "\u2014"
+            moon_display = "\u2014"
             if moon_data:
-                illum = moon_data['illumination_pct']
-                moon_str = f"  Moon {illum:.0f}%"
-            visible = "✓" if p["visible"] else "✗"
-            color = "success" if p["visible"] else "muted"
-            console.print(f"  [{color}]{start_str}-{end_str}  max {max_el:.0f}°  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}  {visible}[/{color}]")
+                illum = moon_data["illumination_pct"]
+                moon_display = f"moon {illum:.0f}%"
+            vis_display = "VISIBLE" if p["visible"] else "\u2014"
+
+            row_style = "green" if p["visible"] else "dim"
+            table.add_row(
+                date_str, time_str, f"{max_el:.0f}\u00b0", dir_str, f"{dur}min",
+                mag_display, str(quality) if quality > 0 else "\u2014",
+                cloud_display, moon_display, vis_display,
+                style=row_style
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]Showing {min(len(passes), 15)} of {len(passes)} passes[/dim]\n")
 
     fav_text = "  [info]F[/info] - Unfavorite" if config.is_favorite(sat["name"]) else "  [info]F[/info] - Favorite"
     console.print(f"\n[warning]Actions:[/warning]  [info]Enter[/info] - Back{fav_text}")
@@ -1938,8 +2018,6 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
             console.print("[green]Added to favorites[/green]")
         time.sleep(0.5)
         return show_satellite_detail(sat, lat, lon, alt)
-
-
 
 def format_launch_datetime(iso_str: str) -> str:
     """Format ISO datetime to readable local time."""
