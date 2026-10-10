@@ -409,6 +409,45 @@ refresh_console()
 _apod_cache: dict[str, dict] = {}
 _launches_cache: list[dict] | None = None
 _iss_cache: dict | None = None
+def _load_fallback_tle(group: str) -> list[dict]:
+    """Load built-in fallback TLE data for offline use."""
+    import json
+    from pathlib import Path
+    
+    fallback_file = Path(__file__).parent / "data" / "fallback_tle.json"
+    if not fallback_file.exists():
+        return []
+    
+    try:
+        with open(fallback_file, "r") as f:
+            data = json.load(f)
+        sats = data.get(group, [])
+        for s in sats:
+            s.setdefault("group", group)
+            s.setdefault("norad_id", "")
+            s.setdefault("launch_year", "")
+            s.setdefault("launch_number", "")
+            s.setdefault("launch_piece", "")
+        return sats
+    except Exception:
+        return []
+
+
+def fetch_satellite_metadata(norad_id: str) -> dict | None:
+    """Fetch satellite metadata from SatNOGS API."""
+    import requests
+    try:
+        url = f"https://db.satnogs.org/api/satellites/{norad_id}/"
+        headers = {"User-Agent": USER_AGENT}
+        res = requests.get(url, headers=headers, timeout=2)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return None
+
+
+_tle_cache: dict[str, list[dict]] = {}
 
 
 def _spacecrew_version() -> str:
@@ -442,19 +481,19 @@ def fetch_with_retry(url, headers=None, timeout=5, max_retries=3, backoff_factor
     if headers is None:
         headers = {"User-Agent": USER_AGENT}
 
-    for attempt in range(max_retries):
+    for attempt in range(max_retries + 1):
         try:
             res = requests.get(url, headers=headers, timeout=timeout)
             if res.status_code == 200:
                 return res
             elif res.status_code == 429:
-                if attempt < max_retries - 1:
+                if attempt < max_retries:
                     wait_time = backoff_factor * (2 ** attempt)
                     time.sleep(wait_time)
                     continue
             return res
         except requests.RequestException:
-            if attempt == max_retries - 1:
+            if attempt == max_retries:
                 raise
             time.sleep(backoff_factor * (2 ** attempt))
     return None
@@ -1176,27 +1215,24 @@ for display_name, groups in SATELLITE_GROUPS.items():
 
 
 def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list[dict]:
-    """Fetch TLE data from Celestrak."""
+    """Fetch TLE data from Celestrak with fast timeout and offline fallback."""
     global _tle_cache
     cache_key = f"tle:{group}"
-    
+
     if group in _tle_cache:
         return _tle_cache[group]
-    
+
     cached = cache.get(cache_key, 1)  # 1 day TTL
     if cached:
         _tle_cache[group] = cached
         return cached
-    
+
     if _global_offline:
-        return []
-    
+        return _load_fallback_tle(group)
+
     url = CELESTRAK_TLE_URLS.get(group, CELESTRAK_TLE_URLS["stations"])
     try:
-        if show_progress:
-            res = fetch_with_progress(url, f"Fetching {group} TLE...", timeout=15)
-        else:
-            res = fetch_with_retry(url, timeout=15)
+        res = fetch_with_retry(url, timeout=2, max_retries=0)
         if res and res.status_code == 200:
             lines = res.text.strip().split("\n")
             satellites = []
@@ -1206,16 +1242,32 @@ def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list
                     line1 = lines[i + 1].strip()
                     line2 = lines[i + 2].strip()
                     if line1.startswith("1 ") and line2.startswith("2 "):
-                        satellites.append({"name": name, "line1": line1, "line2": line2, "group": group})
+                        norad_id = line1[2:7].strip()
+                        launch_year = line1[9:11]
+                        launch_num = line1[11:14].strip()
+                        launch_piece = line1[14:17].strip()
+                        satellites.append({
+                            "name": name, 
+                            "line1": line1, 
+                            "line2": line2, 
+                            "group": group,
+                            "norad_id": norad_id,
+                            "launch_year": launch_year,
+                            "launch_number": launch_num,
+                            "launch_piece": launch_piece,
+                        })
             _tle_cache[group] = satellites
             cache.set(cache_key, satellites)
             return satellites
     except Exception:
         pass
-    return []
 
+    stale_cache = cache.get(cache_key, 365)
+    if stale_cache:
+        _tle_cache[group] = stale_cache
+        return stale_cache
 
-_tle_cache: dict[str, list[dict]] = {}
+    return _load_fallback_tle(group)
 
 def cloud_emoji(pct: float) -> str:
     """Return cloud emoji."""
@@ -2250,7 +2302,7 @@ def create_passes_panel_list(sorted_sats: list, max_passes_per_sat: int = 3) -> 
             more = f"    ... and {len(sat_passes) - max_passes_per_sat} more passes"
             text.append(more, style="muted")
 
-        panels.append(Panel(text, border_style=border_style, padding=(0, 1)))
+        panels.append(Panel(text, border_style=border_style, padding=(0, 1), expand=True))
 
     return panels
 
