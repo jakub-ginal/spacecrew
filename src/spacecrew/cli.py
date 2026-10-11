@@ -14,9 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import argcomplete
-import chafa
 import requests
-from PIL import Image
 from rich.columns import Columns
 from rich.console import Console
 from rich.panel import Panel
@@ -241,7 +239,9 @@ def fetch_with_progress(url: str, description: str = "Fetching...", **kwargs):
 
 
 def multi_fetch_with_progress(urls: list[tuple[str, str]], description: str = "Fetching data..."):
-    """Fetch multiple URLs with progress bar."""
+    """Fetch multiple URLs in parallel with progress bar."""
+    from concurrent.futures import ThreadPoolExecutor
+
     results = []
     with Progress(
         SpinnerColumn(),
@@ -252,13 +252,21 @@ def multi_fetch_with_progress(urls: list[tuple[str, str]], description: str = "F
         transient=True,
     ) as progress:
         task = progress.add_task(description, total=len(urls))
-        for url, label in urls:
+
+        def _get(item):
+            url, label = item
             try:
-                response = requests.get(url, timeout=30)
-                results.append((label, response))
+                response = requests.get(
+                    url, headers={"User-Agent": USER_AGENT}, timeout=30
+                )
+                return (label, response)
             except Exception:
-                results.append((label, None))
-            progress.advance(task)
+                return (label, None)
+
+        with ThreadPoolExecutor(max_workers=min(8, len(urls) or 1)) as pool:
+            for result in pool.map(_get, urls):
+                results.append(result)
+                progress.advance(task)
     return results
 
 
@@ -572,8 +580,13 @@ def build_tree_menu(people_count, iss_groups, tiangong_groups):
 def fetch_photo_panel(url):
     if not url:
         return Panel(Text("No photo", style="dim red"), title="Photo", expand=False)
+    if _global_no_images:
+        return Panel(Text("Images disabled (--no-image)", style="dim"), title="Photo", expand=False)
 
     try:
+        import chafa
+        from PIL import Image
+
         res = fetch_with_retry(url, timeout=5)
         if res and res.status_code == 200:
             img = Image.open(BytesIO(res.content)).convert("RGB")
@@ -1262,7 +1275,7 @@ CELESTRAK_TLE_URLS = {
     "military": "https://celestrak.org/NORAD/elements/gp.php?GROUP=military&FORMAT=tle",
     "radar": "https://celestrak.org/NORAD/elements/gp.php?GROUP=radar&FORMAT=tle",
     "cubesat": "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle",
-    "other": "https://celestrak.org/NORAD/elements/gp.php?GROUP=other&FORMAT=tle",
+    "other": "https://celestrak.org/NORAD/elements/gp.php?GROUP=analyst&FORMAT=tle",
 }
 
 SATELLITE_GROUPS = {
@@ -1322,8 +1335,9 @@ def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list
                             "launch_piece": launch_piece,
                         })
             _tle_cache[group] = satellites
-            cache.set(cache_key, satellites)
-            return satellites
+            if satellites:
+                cache.set(cache_key, satellites)
+                return satellites
     except Exception:
         pass
 
@@ -1332,7 +1346,9 @@ def fetch_tle_data(group: str = "stations", show_progress: bool = False) -> list
         _tle_cache[group] = stale_cache
         return stale_cache
 
-    return _load_fallback_tle(group)
+    fallback = _load_fallback_tle(group)
+    _tle_cache[group] = fallback
+    return fallback
 
 def cloud_emoji(pct: float) -> str:
     """Return cloud emoji."""
@@ -1367,6 +1383,13 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
     obs_x = R_earth * cos(obs_lat_rad) * cos(obs_lon_rad)
     obs_y = R_earth * cos(obs_lat_rad) * sin(obs_lon_rad)
     obs_z = R_earth * sin(obs_lat_rad)
+
+    # Observer ENU basis (constant per location, hoisted out of the hot loop)
+    sin_lat, cos_lat = sin(obs_lat_rad), cos(obs_lat_rad)
+    sin_lon, cos_lon = sin(obs_lon_rad), cos(obs_lon_rad)
+    east_x, east_y, east_z = -sin_lon, cos_lon, 0.0
+    north_x, north_y, north_z = -sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat
+    up_x, up_y, up_z = cos_lat * cos_lon, cos_lat * sin_lon, sin_lat
     
     for sat_data in satellites:
         try:
@@ -1404,19 +1427,7 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                     dz = sat_z - obs_z
                     
                     range_km = sqrt(dx*dx + dy*dy + dz*dz)
-                    
-                    east_x = -sin(obs_lon_rad)
-                    east_y = cos(obs_lon_rad)
-                    east_z = 0
-                    
-                    north_x = -sin(obs_lat_rad) * cos(obs_lon_rad)
-                    north_y = -sin(obs_lat_rad) * sin(obs_lon_rad)
-                    north_z = cos(obs_lat_rad)
-                    
-                    up_x = cos(obs_lat_rad) * cos(obs_lon_rad)
-                    up_y = cos(obs_lat_rad) * sin(obs_lon_rad)
-                    up_z = sin(obs_lat_rad)
-                    
+
                     east = dx * east_x + dy * east_y + dz * east_z
                     north = dx * north_x + dy * north_y + dz * north_z
                     up = dx * up_x + dy * up_y + dz * up_z
@@ -2508,12 +2519,9 @@ def show_dashboard():
     """Show stunning btop-like dashboard with all space data (Live layout)."""
     from datetime import datetime, timezone
     from rich.layout import Layout
-    from rich.live import Live
     from rich.align import Align
     from rich.panel import Panel
     from rich.text import Text
-    import sys
-    import select
     
     lat = config.get("observer_lat")
     lon = config.get("observer_lon")
@@ -2567,17 +2575,11 @@ def show_dashboard():
         else:
             layout["iss"].update(Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="white"))
         
-        tg_data = fetch_iss_position()
-        if tg_data and tg_data.get("iss_position"):
-            pos = tg_data["iss_position"]
-            tg_text = Text()
-            tg_text.append(" TIANGONG\n", style="title")
-            tg_text.append(f" Lat: {pos.get('latitude', 'N/A')}  Lon: {pos.get('longitude', 'N/A')}\n", style="text")
-            tg_text.append(f" Alt: {tg_data.get('altitude', 'N/A')} km  Vel: {tg_data.get('velocity', 'N/A')} km/h\n", style="text")
-            tg_text.append(f" Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
-            layout["tiangong"].update(Panel(tg_text, title="[info]Tiangong[/info]", border_style="white"))
-        else:
-            layout["tiangong"].update(Panel("[error]Tiangong data unavailable[/error]", title="[info]Tiangong[/info]", border_style="white"))
+        tg_text = Text()
+        tg_text.append(" TIANGONG\n", style="title")
+        tg_text.append(" Live position unavailable\n", style="muted")
+        tg_text.append(" See Satellite Passes for Tiangong passes", style="muted")
+        layout["tiangong"].update(Panel(tg_text, title="[info]Tiangong[/info]", border_style="white"))
         
         passes_text = Text()
         passes_text.append(" NEXT PASSES (24h)\n", style="title")
@@ -2672,7 +2674,7 @@ def show_dashboard():
             apod_text.append(" No data", style="muted")
         layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="white"))
         
-        footer_text = Text.from_markup("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  [info]:[/info] Command  ")
+        footer_text = Text.from_markup("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  ")
         footer_text.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
         layout["footer"].update(Align.center(footer_text))
         
@@ -2685,9 +2687,10 @@ def show_dashboard():
         console.print(layout)
         
         choice = input("> ").strip().lower()
-        
-        if not choice:
-            break  # Enter = back
+
+        if not choice or choice == "q":
+            break  # Enter = back, q = quit
+        # any other key (incl. r) rebuilds with fresh data
     
     clear_screen()
 
@@ -2800,6 +2803,7 @@ def handle_people_in_space():
 
 
 _global_offline = False
+_global_no_images = False
 
 
 def parse_args():
@@ -2825,6 +2829,9 @@ def parse_args():
         "--offline", action="store_true", help="Offline mode: use only cached data, no network requests"
     )
     parser.add_argument(
+        "--no-image", action="store_true", help="Skip astronaut/APOD photo rendering (faster, no Pillow/chafa needed)"
+    )
+    parser.add_argument(
         "--generate-completion",
         choices=["bash", "zsh", "fish"],
         help="Generate shell completion script for the specified shell",
@@ -2834,7 +2841,7 @@ def parse_args():
 
 
 def main():
-    global _global_offline
+    global _global_offline, _global_no_images
     args = parse_args()
 
     if getattr(args, 'generate_completion', None):
@@ -2851,6 +2858,9 @@ def main():
         _global_offline = True
         console.print("[yellow]Offline mode: using cached data only[/yellow]")
         time.sleep(0.5)
+
+    if getattr(args, "no_image", False):
+        _global_no_images = True
     
     if args.clear_cache:
         cache.clear_expired(config.get("cache_ttl_days", 30))

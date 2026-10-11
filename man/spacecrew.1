@@ -1,3 +1,4 @@
+.TH SPACECEW 1 "2026-10-11" "spacecrew 1.2.12" "User Commands"
 .SH NAME
 spacecrew \- Track people in space, NASA APOD, launches, ISS position, and space weather
 
@@ -8,6 +9,7 @@ spacecrew \- Track people in space, NASA APOD, launches, ISS position, and space
 [\fB\-\-no\-cache\fR]
 [\fB\-\-clear\-cache\fR]
 [\fB\-\-offline\fR]
+[\fB\-\-no\-image\fR]
 [\fB\-\-generate\-completion\fR \fI{\fBbash\fR|\fBzsh\fR|\fBfish\fR}\fR]
 
 .SH DESCRIPTION
@@ -39,7 +41,11 @@ Clear expired cache entries and exit.
 Offline mode: use only cached data, no network requests.
 
 .TP
-\fB\-\-generate\-completion\fR \fI{\fBbash\fR|\fBzsh\fR|\fBfish\fR}
+\fB\-\-no\-image\fR
+Skip astronaut/APOD photo rendering (faster, no Pillow/chafa needed).
+
+.TP
+\fB\-\-generate\-completion\fR \fI{\fBbash\fR|\fBzsh\fR|\fBfish\fR}\fR
 Generate shell completion script for the specified shell (bash, zsh, or fish)
 and print it to stdout. Redirect output to a file to install.
 
@@ -68,11 +74,15 @@ Install zsh completion.
 \fBspacecrew \-\-generate\-completion fish > \fI~/.config/fish/completions/spacecrew.fish\fR
 Install fish completion.
 
-.SH FILES
+.SH ENVIRONMENT
+.TP
+\fBNASA_API_KEY\fR
+Optional NASA API key for APOD and space weather (DONKI). Defaults to DEMO_KEY.
 .TP
 \fI~/.config/spacecrew/config.toml\fR
-Configuration file.
+Configuration file (theme, observer location, favorites).
 
+.SH FILES
 .TP
 \fI~/.config/spacecrew/cache.db\fR
 Cache database.
@@ -83,9 +93,5 @@ Cache database.
 
 .SH AUTHOR
 Jakub Ginał
-
-.SH SEE ALSO
-.BR argcomplete (1),
-.BR rich (1)
 
 Full documentation: https://github.com/jakub-ginal/spacecrew

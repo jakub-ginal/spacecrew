@@ -28,7 +28,24 @@ pipx install .
 ## Usage
 
 Simply type `spacecrew` anywhere in your terminal.
-Follow the interactive menu to select a mission or view specific astronaut details and photos.
+Follow the interactive menu:
+
+1. People in Space
+2. NASA APOD
+3. Upcoming Launches
+4. ISS Position
+5. Space Weather
+6. Satellite Passes
+7. Theme
+8. Dashboard
+
+Start directly in a mode:
+
+```bash
+spacecrew --mode passes
+spacecrew --mode apod --offline
+spacecrew --mode iss --no-image
+```
 
 ### Time in Space
 
@@ -43,11 +60,21 @@ To completely remove the program, run:
 ```bash
 pip uninstall spacecrew
 ```
+
+## Configuration
+
+`~/.config/spacecrew/config.toml` stores your NASA API key, theme,
+observer location, and favorites. Cache lives in `~/.config/spacecrew/cache.db`.
+
+```bash
+export NASA_API_KEY="your-key-here"  # optional, DEMO_KEY is used otherwise
+spacecrew --offline      # cached data only, no network
+spacecrew --no-cache     # disable persistent cache for this run
+spacecrew --clear-cache  # clear expired cache entries
+spacecrew --no-image     # skip photo rendering
+spacecrew --generate-completion bash  # bash|zsh|fish
+man spacecrew            # manual page
+```
 ## Data Source
 
 Data provided by [International Space Station APIs](https://github.com/corquaid/international-space-station-APIs) by **Cormac Quaid**
-
-
-
-
-a
