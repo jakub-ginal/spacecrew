@@ -5,7 +5,6 @@ Zero API calls, unlimited, works offline.
 
 from datetime import datetime, timezone
 from math import sin, cos, tan, asin, acos, atan2, radians, degrees, floor
-from typing import Tuple
 
 
 def calculate_moon_phase(date: datetime, lat: float, lon: float) -> dict:
@@ -58,25 +57,25 @@ def calculate_moon_phase(date: datetime, lat: float, lon: float) -> dict:
     # Illumination fraction
     illumination = (1 + cos(radians(i))) / 2
     
-    # Phase name
-    if illumination < 0.01:
+    # Phase name from elongation (0=new, 180=full) so waxing/waning differ
+    elongation = D % 360
+    phase = elongation / 360
+    if phase < 0.03 or phase >= 0.97:
         phase_name = "NEW"
-    elif illumination < 0.25:
+    elif phase < 0.22:
         phase_name = "WAXING CRESCENT"
-    elif illumination < 0.51:
+    elif phase < 0.28:
         phase_name = "FIRST QUARTER"
-    elif illumination < 0.75:
+    elif phase < 0.47:
         phase_name = "WAXING GIBBOUS"
-    elif illumination < 0.99:
+    elif phase < 0.53:
         phase_name = "FULL"
-    elif illumination < 0.75:
+    elif phase < 0.72:
         phase_name = "WANING GIBBOUS"
-    elif illumination < 0.51:
+    elif phase < 0.78:
         phase_name = "LAST QUARTER"
-    elif illumination < 0.25:
-        phase_name = "WANING CRESCENT"
     else:
-        phase_name = "NEW"
+        phase_name = "WANING CRESCENT"
     
     # Moon rise/set (simplified)
     # Using approximate formula

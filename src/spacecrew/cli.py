@@ -381,7 +381,12 @@ class Cache:
             if row:
                 age_days = (time.time() - row["timestamp"]) / 86400
                 if age_days <= ttl_days:
-                    return json.loads(row["data"])
+                    try:
+                        return json.loads(row["data"])
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+                        conn.commit()
+                        return None
                 else:
                     conn.execute("DELETE FROM cache WHERE key = ?", (key,))
                     conn.commit()
@@ -407,6 +412,7 @@ cache = Cache(CACHE_DB)
 refresh_console()
 
 _apod_cache: dict[str, dict] = {}
+_apod_scrape_cache: dict[str, str | None] = {}
 _launches_cache: list[dict] | None = None
 _iss_cache: dict | None = None
 def _load_fallback_tle(group: str) -> list[dict]:
@@ -465,13 +471,20 @@ USER_AGENT = (
 
 
 def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")
+    try:
+        console.clear()
+        if sys.stdout.isatty():
+            # Erase scrollback too, so old menus aren't visible on scroll
+            sys.stdout.write("\x1b[3J")
+            sys.stdout.flush()
+    except Exception:
+        os.system("cls" if os.name == "nt" else "clear")
 
 
 def to_thumb_url(original_url: str, width: int) -> str:
-    m = re.match(r"(.*/commons)/(\w/\w\w)/([^/]+)$", original_url)
+    m = re.match(r"(.*/commons)/(\w/\w\w)/([^/]+)$", original_url or "")
     if not m:
-        raise ValueError(f"unexpected commons URL format {original_url}")
+        return original_url
     base, hashpath, filename = m.groups()
     return f"{base}/thumb/{hashpath}/{filename}/{width}px-{filename}"
 
@@ -600,7 +613,7 @@ def calculate_space_experience(launched_timestamp, previous_days):
     if not launched_timestamp:
         return "N/A", f"{previous_days} days"
 
-    dt = datetime.fromtimestamp(launched_timestamp)
+    dt = datetime.fromtimestamp(launched_timestamp, tz=timezone.utc)
     launched_str = dt.strftime("%Y-%m-%d %H:%M UTC")
 
     current_mission_days = (time.time() - launched_timestamp) / 86400
@@ -645,9 +658,12 @@ def create_profile_table(person):
 
 def show_astronaut_view(person):
     clear_screen()
-    img_url = person.get("image")
-    if "thumb" not in img_url:
-        img_url = to_thumb_url(img_url, WIKIMEDIA_THUMB_WIDTH)
+    img_url = person.get("image") or ""
+    if img_url and "thumb" not in img_url:
+        try:
+            img_url = to_thumb_url(img_url, WIKIMEDIA_THUMB_WIDTH)
+        except ValueError:
+            pass
     photo_panel = fetch_photo_panel(img_url)
     profile_table = create_profile_table(person)
     console.print(Columns([photo_panel, profile_table]))
@@ -674,7 +690,7 @@ def handle_mission_view(craft, members):
 
 
 def get_nasa_api_key() -> str:
-    return config.get("nasa_api_key", "DEMO_KEY")
+    return config.get("nasa_api_key") or "DEMO_KEY"
 
 
 def fetch_apod_date(target_date: str | None):
@@ -693,10 +709,11 @@ def fetch_apod_date(target_date: str | None):
     if _global_offline:
         return None
     
+    if not target_date:
+        # api.nasa.gov 500s on dateless "today" requests; send explicit date
+        target_date = datetime.now(timezone.utc).date().isoformat()
     base_url = "https://api.nasa.gov/planetary/apod"
-    params = {"api_key": get_nasa_api_key()}
-    if target_date:
-        params["date"] = target_date
+    params = {"api_key": get_nasa_api_key(), "date": target_date}
 
     url = f"{base_url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
     try:
@@ -709,6 +726,37 @@ def fetch_apod_date(target_date: str | None):
     except Exception:
         pass
     return None
+
+
+def fetch_apod_scraped_image(target_date: str | None) -> str | None:
+    """Scrape the real APOD image URL from science.nasa.gov.
+
+    api.nasa.gov currently serves a logo placeholder in url/hdurl
+    for recent dates; the landing page shows the actual picture.
+    Only today's (latest) picture is available this way.
+    """
+    import html
+
+    if target_date:
+        return None
+    if "today" in _apod_scrape_cache:
+        return _apod_scrape_cache["today"]
+    try:
+        res = fetch_with_retry("https://science.nasa.gov/apod/", timeout=10)
+        if not res or res.status_code != 200:
+            return None
+        m = re.search(
+            r'<a\s[^>]*href="[^"]*image-article/apod-[^"]*"[^>]*>\s*<img[^>]+src="([^"]+)"',
+            res.text,
+            re.I | re.S,
+        )
+        if not m:
+            return None
+        img = html.unescape(m.group(1))
+        _apod_scrape_cache["today"] = img
+        return img
+    except Exception:
+        return None
 
 
 def show_apod_view(target_date: str | None = None):
@@ -732,8 +780,9 @@ def show_apod_view(target_date: str | None = None):
         copyright_text = apod.get("copyright", "")
         author = apod.get("author", "")  # Not always present
 
+        img_url = ""
         if media_type == "image":
-            img_url = hdurl if hdurl else url
+            img_url = fetch_apod_scraped_image(target_date) or hdurl or url
             photo_panel = fetch_photo_panel(img_url)
         else:
             photo_panel = Panel(Text(f"[Video] {url}", style="dim yellow"), title="Media", expand=False)
@@ -749,9 +798,9 @@ def show_apod_view(target_date: str | None = None):
         if copyright_text:
             info_text.append(f"Copyright: ", style="title")
             info_text.append(f"{copyright_text}\n", style="text")
-        if hdurl:
+        if img_url:
             info_text.append(f"HD URL: ", style="title")
-            info_text.append(f"[link={hdurl}]Open in browser[/link]\n", style="info")
+            info_text.append(f"[link={img_url}]Open in browser[/link]\n", style="info")
         info_text.append(f"\nExplanation:\n", style="title")
         info_text.append(explanation, style="text")
 
@@ -760,7 +809,7 @@ def show_apod_view(target_date: str | None = None):
         console.print(Columns([photo_panel, info_panel]))
 
         actions = []
-        if media_type == "image" and hdurl:
+        if media_type == "image" and img_url:
             actions.append("[info]o[/info] - Open HD in browser")
         actions.append("[info]p[/info] - Previous day")
         actions.append("[info]Enter[/info] - Back to menu")
@@ -768,8 +817,8 @@ def show_apod_view(target_date: str | None = None):
         console.print(f"\n[warning]Actions:[/warning]  {'  '.join(actions)}")
         action = input("> ").strip().lower()
 
-        if action == "o" and media_type == "image" and hdurl:
-            webbrowser.open(hdurl)
+        if action == "o" and media_type == "image" and img_url:
+            webbrowser.open(img_url)
             console.print("[green]Opened in browser[/green]")
             time.sleep(1)
         elif action == "p":
@@ -786,24 +835,25 @@ def show_apod_view(target_date: str | None = None):
 
 def show_iss_position():
     """Show current ISS position."""
-    clear_screen()
-    console.print("[info]Fetching ISS position...[/info]\n")
-    
-    data = fetch_iss_position()
-    if not data:
-        console.print("[error]Error: Could not fetch ISS position[/error]")
-        input("\nPress Enter to return to menu...")
-        return
-    
-    from rich.panel import Panel
-    console.print(Panel(format_iss_position(data), title="ISS Tracker", border_style="white"))
-    
-    console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Refresh  [info]Enter[/info] - Back")
-    choice = input("> ").strip().lower()
-    if choice == "r":
+    while True:
+        clear_screen()
+        console.print("[info]Fetching ISS position...[/info]\n")
+
+        data = fetch_iss_position()
+        if not data:
+            console.print("[error]Error: Could not fetch ISS position[/error]")
+            input("\nPress Enter to return to menu...")
+            return
+
+        from rich.panel import Panel
+        console.print(Panel(format_iss_position(data), title="ISS Tracker", border_style="white"))
+
+        console.print("\n[warning]Actions:[/warning]  [info]r[/info] - Refresh  [info]Enter[/info] - Back")
+        choice = input("> ").strip().lower()
+        if choice != "r":
+            return
         global _iss_cache
         _iss_cache = None
-        show_iss_position()
 
 
 LAUNCHES_API_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
@@ -910,35 +960,37 @@ def fetch_iss_position() -> dict | None:
 
 def get_location_name(lat: float, lon: float) -> str:
     """Get country/region name from coordinates using reverse geocoding."""
-    try:
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=3&addressdetails=1"
-        headers = {"User-Agent": USER_AGENT}
-        res = requests.get(url, headers=headers, timeout=5)
-        if res and res.status_code == 200:
-            data = res.json()
-            address = data.get("address", {})
-            country = address.get("country")
-            if country:
-                return country
-            for key in ["sea", "ocean", "water_body", "strait", "bay", "gulf"]:
-                if key in address:
-                    return f"Over {address[key]}"
-            for key in ["island", "archipelago", "continent"]:
-                if key in address:
-                    return address[key]
-    except Exception:
+    if _global_offline:
         pass
+    else:
+        try:
+            url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=3&addressdetails=1"
+            res = fetch_with_retry(url, timeout=5, max_retries=1)
+            if res and res.status_code == 200:
+                data = res.json()
+                address = data.get("address", {})
+                country = address.get("country")
+                if country:
+                    return country
+                for key in ["sea", "ocean", "water_body", "strait", "bay", "gulf"]:
+                    if key in address:
+                        return f"Over {address[key]}"
+                for key in ["island", "archipelago", "continent"]:
+                    if key in address:
+                        return address[key]
+        except Exception:
+            pass
     
     if lat < -60:
         return "Over Southern Ocean / Antarctica"
     elif lat > 60:
         return "Over Arctic Ocean"
     elif -60 <= lat <= 60:
-        if -180 <= lon <= -70 or 100 <= lon <= 180:
+        if -180 <= lon < -125 or 145 < lon <= 180:
             return "Over Pacific Ocean"
-        elif -70 < lon < 20:
+        elif -50 <= lon <= -15:
             return "Over Atlantic Ocean"
-        elif 20 <= lon < 100:
+        elif 55 <= lon <= 105:
             return "Over Indian Ocean"
     return "Unknown"
 
@@ -953,7 +1005,7 @@ def format_iss_position(data: dict) -> str:
     lon = pos.get("longitude", "N/A")
     timestamp = data.get("timestamp", 0)
     
-    dt = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
+    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else datetime.now(timezone.utc)
     time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     
     location_name = "Unknown"
@@ -965,22 +1017,21 @@ def format_iss_position(data: dict) -> str:
         pass
     
     extra_info = ""
-    if data.get("source") == "wheretheiss_at":
+    altitude = data.get("altitude")
+    velocity = data.get("velocity")
+    visibility = data.get("visibility")
+    if altitude:
         try:
-            res = fetch_with_retry("https://api.wheretheiss.at/v1/satellites/25544", timeout=15, max_retries=1)
-            if res and res.status_code == 200:
-                w_data = res.json()
-                altitude = w_data.get("altitude")
-                velocity = w_data.get("velocity")
-                visibility = w_data.get("visibility")
-                if altitude:
-                    extra_info += f"Altitude:  {altitude:.1f} km\n"
-                if velocity:
-                    extra_info += f"Velocity:  {velocity:.0f} km/h\n"
-                if visibility:
-                    extra_info += f"Visibility: {visibility}\n"
-        except Exception:
+            extra_info += f"Altitude:  {float(altitude):.1f} km\n"
+        except (TypeError, ValueError):
             pass
+    if velocity:
+        try:
+            extra_info += f"Velocity:  {float(velocity):.0f} km/h\n"
+        except (TypeError, ValueError):
+            pass
+    if visibility:
+        extra_info += f"Visibility: {visibility}\n"
     
     maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
     
@@ -1060,7 +1111,16 @@ def fetch_space_weather(limit: int = 5) -> dict:
             result["forecast"] = res.text
     except Exception:
         pass
-    
+
+    max_kp = max((d.get("kp_index", 0) for d in result.get("kp_index", [])), default=0)
+    result["max_kp"] = max_kp
+    if max_kp >= 5:
+        result["storm_level"] = "Storm"
+    elif max_kp >= 4:
+        result["storm_level"] = "Active"
+    else:
+        result["storm_level"] = "Quiet"
+
     _space_weather_cache = result
     cache.set(cache_key, result)
     return result
@@ -1181,7 +1241,12 @@ def show_space_weather():
             _space_weather_cache = None
             console.print("[muted]Refreshing...[/muted]")
             time.sleep(1)
-            return show_space_weather()
+            data = fetch_space_weather()
+            if not data:
+                console.print("[bold red]Error: Could not fetch space weather data[/bold red]")
+                input("\nPress Enter to return to menu...")
+                return
+            continue
 
 
 CELESTRAK_TLE_URLS = {
@@ -1446,9 +1511,8 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                 
                                 quality = calculate_pass_quality(pass_max_el, duration, sun_el_max, magnitude, rarity)
                                 
-                                cloud_pct = get_cloud_cover(obs_lat, obs_lon, pass_max_time)
-                                
-                                sun_el_max, _ = calculate_sun_position(pass_max_time, obs_lat, obs_lon)
+                                cloud_pct = get_cloud_cover(obs_lat, obs_lon, pass_max_time, allow_network=not _global_offline)
+
                                 moon_data = None
                                 if sun_el_max < -6:  # Night pass
                                     moon_data = calculate_moon_phase(pass_max_time, obs_lat, obs_lon)
@@ -1737,6 +1801,8 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         return best + good + ok
     
     while True:
+        selected_groups = None
+        f_choice = None
         clear_screen()
         console.print("[title]Satellite Pass Predictions[/title]")
         console.print("  [number]1[/number] Tonight's Best (smart filter)")
@@ -1790,7 +1856,7 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         
         clear_screen()
         
-        if 'selected_groups' in locals():
+        if selected_groups is not None:
             groups = selected_groups
         elif mode == "best":
             groups = ["iss", "stations"]
@@ -1798,7 +1864,11 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
             groups = ["stations", "starlink", "iridium", "gps", "geo", "weather", "science", "amateur", "military", "radar", "cubesat", "other"]
         
         if len(groups) > 1:
-            urls = [(CELESTRAK_TLE_URLS[g], g) for g in groups]
+            urls = [(CELESTRAK_TLE_URLS[g], g) for g in groups if g in CELESTRAK_TLE_URLS]
+            if not urls:
+                console.print("[yellow]No TLE source configured for selected groups[/yellow]")
+                input("\nPress Enter to return...")
+                continue
             results = multi_fetch_with_progress(urls, "Fetching TLE data...")
             all_satellites = []
             for label, res in results:
@@ -1811,7 +1881,7 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                             line1 = lines[i + 1].strip()
                             line2 = lines[i + 2].strip()
                             if line1.startswith("1 ") and line2.startswith("2 "):
-                                sats.append({"name": name, "line1": line1, "line2": line2, "group": g})
+                                sats.append({"name": name, "line1": line1, "line2": line2, "group": label})
                     all_satellites.extend(sats)
         else:
             all_satellites = []
@@ -1822,13 +1892,15 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
                 all_satellites.extend(sats)
         
         if not all_satellites:
+            console.print("[yellow]No satellite data loaded (network down and no cache)[/yellow]")
             input("\nPress Enter to return...")
+            continue
         console.print(f"[success]Loaded {len(all_satellites)} satellites[/success]\n")
         console.print("[muted]Calculating passes...[/muted]\n")
         
         passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
         
-        if 'f_choice' in locals() and f_choice == "fav":
+        if f_choice == "fav":
             favorites = config.get_favorites()
             passes = [p for p in passes if p['name'] in favorites]
         
@@ -1951,8 +2023,8 @@ def predict_specific_satellite(lat: float, lon: float, alt: float):
         
         if action == "s":
             continue  # Re-search
-def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
-    """Show detailed passes for a specific satellite."""
+def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
+    """Show detailed passes once. Returns the action taken."""
     clear_screen()
     console.print(f"[info]Calculating passes for {sat["name"]}...[/info]\n")
 
@@ -2069,7 +2141,14 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
             config.add_favorite(sat["name"])
             console.print("[green]Added to favorites[/green]")
         time.sleep(0.5)
-        return show_satellite_detail(sat, lat, lon, alt)
+        return action
+
+def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
+    """Show detailed passes, refreshing in a loop on favorite toggle."""
+    while True:
+        action = _show_satellite_detail_once(sat, lat, lon, alt)
+        if action != "f":
+            return
 
 def format_launch_datetime(iso_str: str) -> str:
     """Format ISO datetime to readable local time."""
@@ -2394,7 +2473,12 @@ def show_launches_list():
             _launches_cache = None
             console.print("[muted]Refreshing...[/muted]")
             time.sleep(1)
-            return show_launches_list()
+            launches = fetch_launches()
+            if not launches:
+                console.print("[error]Error: Could not fetch launches data[/error]")
+                input("\nPress Enter to return to menu...")
+                return
+            continue
         if choice.isdigit():
             idx = int(choice) - 1
             if 0 <= idx < len(launches):
@@ -2752,7 +2836,7 @@ def parse_args():
 def main():
     global _global_offline
     args = parse_args()
-    
+
     if getattr(args, 'generate_completion', None):
         shell = args.generate_completion
         if shell == "bash":
@@ -2762,9 +2846,6 @@ def main():
         elif shell == "fish":
             print(argcomplete.shellcode(['fish']))
         return
-
-    global _global_offline
-    args = parse_args()
 
     if args.offline:
         _global_offline = True
