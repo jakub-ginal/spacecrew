@@ -422,6 +422,7 @@ refresh_console()
 _apod_cache: dict[str, dict] = {}
 _apod_scrape_cache: dict[str, str | None] = {}
 _satmeta_cache: dict[str, dict | None] = {}
+_sattx_cache: dict[str, list] = {}
 _launches_cache: list[dict] | None = None
 _iss_cache: dict | None = None
 def _load_fallback_tle(group: str) -> list[dict]:
@@ -477,6 +478,56 @@ def fetch_satellite_metadata(norad_id: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def fetch_satellite_transmitters(norad_id: str) -> list:
+    """Fetch transmitter list from SatNOGS API (cached 90 days)."""
+    norad_id = (norad_id or "").strip()
+    if not norad_id:
+        return []
+    if norad_id in _sattx_cache:
+        return _sattx_cache[norad_id]
+    cache_key = f"sattx:{norad_id}"
+    cached = cache.get(cache_key, 90)
+    if cached:
+        _sattx_cache[norad_id] = cached
+        return cached
+    if _global_offline:
+        return []
+    try:
+        res = fetch_with_retry(
+            f"https://db.satnogs.org/api/transmitters/?satellite__norad_cat_id={norad_id}",
+            timeout=5,
+        )
+        if res and res.status_code == 200:
+            tx = res.json()
+            if not isinstance(tx, list):
+                tx = []
+            _sattx_cache[norad_id] = tx
+            try:
+                cache.set(cache_key, tx)
+            except Exception:
+                pass
+            return tx
+    except Exception:
+        pass
+    return []
+
+
+def aurora_verdict(kp: float, lat: float | None) -> tuple[str, str]:
+    """Return (verdict, style) for aurora visibility at a latitude."""
+    if lat is None:
+        return "Set location for verdict", "muted"
+    try:
+        edge = 67 - 2.2 * float(kp)
+    except (TypeError, ValueError):
+        return "Unknown", "muted"
+    alat = abs(float(lat))
+    if alat >= edge:
+        return "Overhead possible", "success"
+    if alat >= edge - 12:
+        return "Low on horizon possible", "warning"
+    return "Unlikely", "muted"
 
 
 _tle_cache: dict[str, list[dict]] = {}
@@ -1230,6 +1281,8 @@ def create_space_weather_table(data: dict) -> Table:
         else:
             storm = "[success]Quiet[/success]"
         table.add_row("Storm Level", storm)
+        verdict, vstyle = aurora_verdict(max_kp, config.get("observer_lat"))
+        table.add_row("Aurora", f"[{vstyle}]{verdict}[/{vstyle}]")
     else:
         table.add_row("Kp Index", "[muted]No data[/muted]")
     
@@ -2149,6 +2202,37 @@ def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
             info.append(bits, style="text")
     if len(info):
         console.print(Panel(info, border_style="dim", padding=(0, 1), expand=True))
+    tx_list = fetch_satellite_transmitters(norad_id) if norad_id else []
+    alive_tx = [t for t in tx_list if t.get("alive", True)]
+    if alive_tx:
+        def _mhz(hz):
+            try:
+                return f"{float(hz) / 1e6:.3f} MHz"
+            except (TypeError, ValueError):
+                return ""
+
+        tx_text = Text()
+        tx_text.append("FREQUENCIES  ", style="bold")
+        tx_text.append(f"({len(alive_tx)} alive)\n", style="muted")
+        for t in alive_tx[:5]:
+            down = _mhz(t.get("downlink_low")) or _mhz(t.get("downlink_high"))
+            if not down:
+                continue
+            bits = [down]
+            mode = _clean(t.get("mode"))
+            if mode:
+                bits.append(mode)
+            up = _mhz(t.get("uplink_low")) or _mhz(t.get("uplink_high"))
+            if up:
+                bits.append(f"up {up}")
+            if t.get("baud"):
+                bits.append(f"{t['baud']}bd")
+            tx_text.append("  ".join(bits), style="text")
+            desc = _clean(t.get("description"))
+            if desc:
+                tx_text.append(f"  {desc}", style="muted")
+            tx_text.append("\n")
+        console.print(Panel(tx_text, border_style="dim", padding=(0, 1), expand=True))
     console.print(f"[dim]Location: {lat:.4f}, {lon:.4f}  \u2022  Next 7 Days[/dim]\n")
 
     if not passes:
@@ -2766,7 +2850,9 @@ def show_dashboard():
                 current_kp = kp[-1].get("kp_index", 0) if kp else 0
                 max_kp = max((d.get("kp_index", 0) for d in kp), default=0)
                 weather_text.append(f" Kp: {current_kp:.1f}  (max {max_kp:.1f})\n", style="text")
-            weather_text.append(f" Storm: {weather_data.get('storm_level', 'Quiet')}", style="text")
+            weather_text.append(f" Storm: {weather_data.get('storm_level', 'Quiet')}\n", style="text")
+            aurora, astyle = aurora_verdict(weather_data.get("max_kp", 0), lat)
+            weather_text.append(f" Aurora: {aurora}", style=astyle)
         else:
             weather_text.append(" No data", style="muted")
         layout["weather"].update(Panel(weather_text, title="[info]Weather[/info]", border_style="white"))
@@ -2986,12 +3072,58 @@ def parse_args():
         "--no-image", action="store_true", help="Skip astronaut/APOD photo rendering (faster, no Pillow/chafa needed)"
     )
     parser.add_argument(
+        "--json", action="store_true", help="Print mode output as JSON and exit (requires --mode)"
+    )
+    parser.add_argument(
         "--generate-completion",
         choices=["bash", "zsh", "fish"],
         help="Generate shell completion script for the specified shell",
     )
     argcomplete.autocomplete(parser)
     return parser.parse_args()
+
+
+def cmd_json_output(mode: str):
+    """Print machine-readable JSON for a mode and exit (no interaction)."""
+    if mode == "people":
+        print(json.dumps(fetch_space_data(), default=str))
+    elif mode == "launches":
+        print(json.dumps(fetch_launches(), default=str))
+    elif mode == "passes":
+        lat = config.get("observer_lat")
+        lon = config.get("observer_lon")
+        alt = config.get("observer_alt", 0)
+        if lat is None or lon is None:
+            print(json.dumps({"error": "observer location not set (run passes mode once or set config)"}))
+            return
+        sats = fetch_tle_data("stations")
+        passes = calculate_visible_passes(sats, lat, lon, alt, days=3)
+        now_utc = datetime.now(timezone.utc)
+        out = []
+        for p in passes:
+            end = p["end"]
+            if getattr(end, "tzinfo", None) is None:
+                end = end.replace(tzinfo=timezone.utc)
+            if end <= now_utc:
+                continue
+            moon = p.get("moon_phase") or {}
+            out.append({
+                "name": p["name"],
+                "group": p.get("group", ""),
+                "start": p["start"],
+                "end": p["end"],
+                "max_elevation": round(p["max_elevation"], 1),
+                "duration_min": round(p["duration"], 1),
+                "magnitude": round(p["magnitude"], 1) if p.get("magnitude", 99) < 99 else None,
+                "quality": p.get("quality", 0),
+                "cloud_cover": p.get("cloud_cover"),
+                "moon_phase": moon.get("phase_name"),
+                "moon_illumination": moon.get("illumination_pct"),
+                "visible": p.get("visible", False),
+            })
+        print(json.dumps(out, default=str))
+    else:
+        print(json.dumps({"error": f"--json supports passes, people, launches (got: {mode})"}))
 
 
 def main():
@@ -3019,6 +3151,13 @@ def main():
     if args.clear_cache:
         cache.clear_expired(config.get("cache_ttl_days", 30))
         console.print("[green]Cache cleared[/green]")
+        return
+
+    if getattr(args, "json", False):
+        if not args.mode or args.mode not in ("passes", "people", "launches"):
+            console.print("[error]--json requires --mode passes|people|launches[/error]")
+            return
+        cmd_json_output(args.mode)
         return
     
     if args.mode:
