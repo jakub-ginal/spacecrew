@@ -421,6 +421,7 @@ refresh_console()
 
 _apod_cache: dict[str, dict] = {}
 _apod_scrape_cache: dict[str, str | None] = {}
+_satmeta_cache: dict[str, dict | None] = {}
 _launches_cache: list[dict] | None = None
 _iss_cache: dict | None = None
 def _load_fallback_tle(group: str) -> list[dict]:
@@ -448,14 +449,31 @@ def _load_fallback_tle(group: str) -> list[dict]:
 
 
 def fetch_satellite_metadata(norad_id: str) -> dict | None:
-    """Fetch satellite metadata from SatNOGS API."""
-    import requests
+    """Fetch satellite metadata from SatNOGS API (cached 90 days)."""
+    norad_id = (norad_id or "").strip()
+    if not norad_id:
+        return None
+    if norad_id in _satmeta_cache:
+        return _satmeta_cache[norad_id]
+    cache_key = f"satmeta:{norad_id}"
+    cached = cache.get(cache_key, 90)
+    if cached:
+        _satmeta_cache[norad_id] = cached
+        return cached
+    if _global_offline:
+        return None
     try:
-        url = f"https://db.satnogs.org/api/satellites/{norad_id}/"
-        headers = {"User-Agent": USER_AGENT}
-        res = requests.get(url, headers=headers, timeout=2)
-        if res.status_code == 200:
-            return res.json()
+        res = fetch_with_retry(
+            f"https://db.satnogs.org/api/satellites/{norad_id}/", timeout=5
+        )
+        if res and res.status_code == 200:
+            meta = res.json()
+            _satmeta_cache[norad_id] = meta
+            try:
+                cache.set(cache_key, meta)
+            except Exception:
+                pass
+            return meta
     except Exception:
         pass
     return None
@@ -1363,6 +1381,32 @@ def azimuth_to_compass(az: float) -> str:
     return dirs[idx]
 
 
+def pass_countdown(start, end=None) -> tuple[str, str]:
+    """Return (countdown text, style) for a pass start/end time."""
+    from datetime import datetime, timezone
+
+    def _aware(dt):
+        if getattr(dt, "tzinfo", None) is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    now = datetime.now(timezone.utc)
+    if end is not None and _aware(end) <= now:
+        return " ENDED", "dim"
+    start = _aware(start)
+    if start <= now:
+        return " NOW", "bold red"
+    total = int((start - now).total_seconds())
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    text = f" in {hours}h {minutes:02d}m" if hours else f" in {minutes}m"
+    if total < 600:
+        return text, "bold red"
+    if total < 3600:
+        return text, "yellow"
+    return text, "muted"
+
+
 
 
 
@@ -1910,7 +1954,14 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
         console.print("[muted]Calculating passes...[/muted]\n")
         
         passes = calculate_visible_passes(all_satellites, lat, lon, alt, days)
-        
+
+        # Drop already-ended passes so lists start with the next live/upcoming one
+        now_utc = datetime.now(timezone.utc)
+        passes = [
+            p for p in passes
+            if (p["end"].replace(tzinfo=timezone.utc) if getattr(p["end"], "tzinfo", None) is None else p["end"]) > now_utc
+        ]
+
         if f_choice == "fav":
             favorites = config.get_favorites()
             passes = [p for p in passes if p['name'] in favorites]
@@ -2040,6 +2091,11 @@ def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
     console.print(f"[info]Calculating passes for {sat["name"]}...[/info]\n")
 
     passes = calculate_visible_passes([sat], lat, lon, alt, days=7)
+    now_utc = datetime.now(timezone.utc)
+    passes = [
+        p for p in passes
+        if (p["end"].replace(tzinfo=timezone.utc) if getattr(p["end"], "tzinfo", None) is None else p["end"]) > now_utc
+    ]
 
     clear_screen()
 
@@ -2057,7 +2113,42 @@ def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
     header.append(f"{sat["name"]} ", style="highlight")
     header.append(f"[{group_display}]{fav_badge}", style="muted")
 
-    console.print(Panel(header, border_style="dim", padding=(0, 1)))
+    console.print(Panel(header, border_style="dim", padding=(0, 1), expand=True))
+
+    norad_id = (sat.get("norad_id") or "").strip()
+    if not norad_id and sat.get("line1", "").startswith("1 "):
+        norad_id = sat["line1"][2:7].strip()
+    info = Text()
+    if norad_id:
+        info.append(f"NORAD {norad_id}  ", style="number")
+    launch_year = (sat.get("launch_year") or "").strip()
+    if launch_year.isdigit():
+        century = "19" if int(launch_year) >= 57 else "20"
+        info.append(
+            f"Launch {century}{launch_year}-{sat.get('launch_number', '')}{sat.get('launch_piece', '')}  ",
+            style="muted",
+        )
+    def _clean(value):
+        text = str(value).strip() if value is not None else ""
+        return "" if text.lower() in ("", "none", "null", "unknown", "n/a") else text
+
+    meta = fetch_satellite_metadata(norad_id) if norad_id else None
+    if meta:
+        operator = meta.get("operator")
+        if isinstance(operator, dict):
+            operator = operator.get("name")
+        countries = meta.get("countries") or []
+        if isinstance(countries, list):
+            countries = ", ".join(str(c.get("name", c) if isinstance(c, dict) else c) for c in countries[:3])
+        bits = "  ".join(b for b in [
+            _clean(operator),
+            _clean(countries),
+            f"Status: {meta.get('status')}" if _clean(meta.get('status')) else "",
+        ] if b)
+        if bits:
+            info.append(bits, style="text")
+    if len(info):
+        console.print(Panel(info, border_style="dim", padding=(0, 1), expand=True))
     console.print(f"[dim]Location: {lat:.4f}, {lon:.4f}  \u2022  Next 7 Days[/dim]\n")
 
     if not passes:
@@ -2084,11 +2175,13 @@ def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
             illum = moon_data["illumination_pct"]
             moon_str = f"  moon {illum:.0f}%"
         visible = " VISIBLE" if next_pass["visible"] else " --"
+        countdown, cd_style = pass_countdown(next_pass["start"], next_pass.get("end"))
 
         next_text = Text()
         next_text.append("NEXT PASS  ", style="bold")
         next_text.append("\n")
-        next_text.append(f"{start_str}-{end_str}  max {max_el:.0f}\u00b0  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}{visible}\n")
+        next_text.append(f"{start_str}-{end_str}  max {max_el:.0f}\u00b0  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}{visible}", style="bold white")
+        next_text.append(countdown + "\n", style=cd_style)
         next_text.append(f"{len(passes)} total passes in 7 days", style="muted")
 
         console.print(Panel(next_text, border_style="dim", padding=(0, 1)))
@@ -2381,9 +2474,11 @@ def create_passes_panel_list(sorted_sats: list, max_passes_per_sat: int = 3) -> 
                 moon_str = f" moon {illum:.0f}%"
             visible = " VISIBLE" if p["visible"] else " --"
             color = "success" if p["visible"] else "muted"
+            countdown, cd_style = pass_countdown(p["start"], p.get("end"))
 
             line = f"    {start_str}-{end_str}  max {max_el:.0f}deg  {dir_str}  {dur}min{mag_str}{qual_str}{cloud_str}{moon_str}{visible}"
             text.append(line, style=color)
+            text.append(countdown, style=cd_style)
             if i < min(len(sat_passes), max_passes_per_sat) - 1:
                 text.append("\n")
 
@@ -2519,9 +2614,13 @@ def show_dashboard():
     """Show stunning btop-like dashboard with all space data (Live layout)."""
     from datetime import datetime, timezone
     from rich.layout import Layout
+    from rich.live import Live
     from rich.align import Align
     from rich.panel import Panel
     from rich.text import Text
+    import sys
+    import select
+    import threading
     
     lat = config.get("observer_lat")
     lon = config.get("observer_lon")
@@ -2532,7 +2631,55 @@ def show_dashboard():
         console.print("[warning]Set your location first in Satellite Passes -> Change location[/warning]")
         input("\nPress Enter to return...")
         return
-    
+
+    state: dict = {"iss": None, "passes": [], "weather": None, "people": None,
+                   "launches": None, "apod": None}
+    state_lock = threading.Lock()
+    stop_event = threading.Event()
+
+    def refresh_state():
+        """Fetch all dashboard data (uses TTL caches, so cheap when fresh)."""
+        global _iss_cache, _launches_cache, _apod_cache, _space_weather_cache
+        # Invalidate module caches so background refreshes actually refetch
+        _iss_cache = None
+        _launches_cache = None
+        _apod_cache = {}
+        _space_weather_cache = None
+        try:
+            data: dict = {}
+            data["iss"] = fetch_iss_position()
+            try:
+                stations = fetch_tle_data("stations")
+                iss_sats = [s for s in stations if "ISS" in s["name"] or "ZARYA" in s["name"] or "NAUKA" in s["name"]]
+                tg_sats = [s for s in stations if "TIANGONG" in s["name"] or "CSS" in s["name"]]
+                key_sats = iss_sats + tg_sats
+                if key_sats:
+                    passes = calculate_visible_passes(key_sats, lat, lon, alt, days=1)
+                    now_utc = datetime.now(timezone.utc)
+                    cutoff = now_utc + timedelta(hours=24)
+                    passes = [p for p in passes if p["end"] > now_utc and p["start"] < cutoff]
+                    passes.sort(key=lambda x: x["start"])
+                    data["passes"] = passes[:5]
+                else:
+                    data["passes"] = []
+            except Exception:
+                data["passes"] = []
+            data["weather"] = fetch_space_weather()
+            data["people"] = fetch_space_data()
+            data["launches"] = fetch_launches()
+            data["apod"] = fetch_apod_date(None)
+            with state_lock:
+                state.update(data)
+        except Exception:
+            pass
+
+    def state_worker():
+        while not stop_event.wait(60):
+            refresh_state()
+
+    console.print("[info]Fetching dashboard data...[/info]\n")
+    refresh_state()
+
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
@@ -2555,7 +2702,7 @@ def show_dashboard():
         Layout(name="apod", ratio=1),
     )
     
-    def build_dashboard():
+    def build_dashboard(data):
         now = datetime.now(timezone.utc)
         
         header_text = Text()
@@ -2563,7 +2710,7 @@ def show_dashboard():
         header_text.append(f"  {now.strftime('%Y-%m-%d %H:%M:%S UTC')}", style="muted")
         layout["header"].update(Align.center(header_text))
         
-        iss_data = fetch_iss_position()
+        iss_data = data.get("iss")
         if iss_data and iss_data.get("iss_position"):
             pos = iss_data["iss_position"]
             iss_text = Text()
@@ -2583,38 +2730,28 @@ def show_dashboard():
         
         passes_text = Text()
         passes_text.append(" NEXT PASSES (24h)\n", style="title")
-        try:
-            stations = fetch_tle_data("stations")
-            iss_sats = [s for s in stations if "ISS" in s["name"] or "ZARYA" in s["name"] or "NAUKA" in s["name"]]
-            tg_sats = [s for s in stations if "TIANGONG" in s["name"] or "CSS" in s["name"]]
-            key_sats = iss_sats + tg_sats
-            if key_sats:
-                passes = calculate_visible_passes(key_sats, lat, lon, alt, days=1)
-                now_utc = datetime.now(timezone.utc)
-                cutoff = now_utc + timedelta(hours=24)
-                passes = [p for p in passes if p["start"] < cutoff]
-                passes.sort(key=lambda x: x["start"])
-                for p in passes[:5]:
-                    start_str = p["start"].strftime("%m-%d %H:%M UTC")
-                    mag = p.get("magnitude", 99)
-                    q = p.get("quality", 0)
-                    mag_str = f" mag {mag:.1f}" if mag < 99 else ""
-                    cloud_pct = p.get("cloud_cover")
-                    moon_data = p.get("moon_phase")
-                    cloud_str = f" CLOUD {cloud_pct}%" if cloud_pct is not None else ""
-                    moon_str = ""
-                    if moon_data:
-                        phase = moon_data['phase_name']
-                        illum = moon_data['illumination_pct']
-                        moon_str = f" MOON {phase} {illum:.0f}%"
-                    passes_text.append(f" {p['name'][:18]:18s} {start_str} max {p['max_elevation']:.0f}°{mag_str} Q{q}{cloud_str}{moon_str}\n", style="text")
-            else:
-                passes_text.append(" No satellite data\n", style="muted")
-        except Exception:
-            passes_text.append(" Error calculating passes\n", style="error")
+        passes = data.get("passes") or []
+        if passes:
+            for p in passes[:5]:
+                start_str = p["start"].strftime("%m-%d %H:%M UTC")
+                mag = p.get("magnitude", 99)
+                q = p.get("quality", 0)
+                mag_str = f" mag {mag:.1f}" if mag < 99 else ""
+                cloud_pct = p.get("cloud_cover")
+                moon_data = p.get("moon_phase")
+                cloud_str = f" CLOUD {cloud_pct}%" if cloud_pct is not None else ""
+                moon_str = ""
+                if moon_data:
+                    phase = moon_data['phase_name']
+                    illum = moon_data['illumination_pct']
+                    moon_str = f" MOON {phase} {illum:.0f}%"
+                countdown, _ = pass_countdown(p["start"], p.get("end"))
+                passes_text.append(f" {p['name'][:18]:18s} {start_str} max {p['max_elevation']:.0f}°{mag_str} Q{q}{cloud_str}{moon_str}{countdown}\n", style="text")
+        else:
+            passes_text.append(" No satellite data\n", style="muted")
         layout["passes"].update(Panel(passes_text, title="[info]Passes[/info]", border_style="white", padding=(0, 1)))
         
-        weather_data = fetch_space_weather()
+        weather_data = data.get("weather")
         weather_text = Text()
         weather_text.append(" SPACE WEATHER\n", style="title")
         if weather_data:
@@ -2634,7 +2771,7 @@ def show_dashboard():
             weather_text.append(" No data", style="muted")
         layout["weather"].update(Panel(weather_text, title="[info]Weather[/info]", border_style="white"))
         
-        people_data = fetch_space_data()
+        people_data = data.get("people")
         people_text = Text()
         people_text.append(" PEOPLE IN SPACE\n", style="title")
         if people_data:
@@ -2646,7 +2783,7 @@ def show_dashboard():
             people_text.append(" No data", style="muted")
         layout["people"].update(Panel(people_text, title="[info]People[/info]", border_style="white"))
         
-        launches_data = fetch_launches()
+        launches_data = data.get("launches")
         launches_text = Text()
         launches_text.append(" NEXT LAUNCHES\n", style="title")
         if launches_data:
@@ -2662,7 +2799,7 @@ def show_dashboard():
             launches_text.append(" No data", style="muted")
         layout["launches"].update(Panel(launches_text, title="[info]Launches[/info]", border_style="white"))
         
-        apod_data = fetch_apod_date(None)
+        apod_data = data.get("apod")
         apod_text = Text()
         apod_text.append(" APOD TODAY\n", style="title")
         if apod_data:
@@ -2674,24 +2811,41 @@ def show_dashboard():
             apod_text.append(" No data", style="muted")
         layout["apod"].update(Panel(apod_text, title="[info]APOD[/info]", border_style="white"))
         
-        footer_text = Text.from_markup("  [info]r[/info] Refresh  [info]q[/info] Quit  [info]Enter[/info] Back  ")
+        footer_text = Text.from_markup("  [info]Enter[/info] Back  [muted]live, data refreshes every 60s[/muted]  ")
         footer_text.append(f"Location: {lat:.2f}, {lon:.2f}", style="muted")
         layout["footer"].update(Align.center(footer_text))
         
         return layout
-    
-    while True:
-        clear_screen()
-        layout = build_dashboard()
-        
-        console.print(layout)
-        
-        choice = input("> ").strip().lower()
 
-        if not choice or choice == "q":
-            break  # Enter = back, q = quit
-        # any other key (incl. r) rebuilds with fresh data
-    
+    def snapshot():
+        with state_lock:
+            return dict(state)
+
+    if not sys.stdout.isatty():
+        # Non-interactive: single static render
+        build_dashboard(snapshot())
+        console.print(layout)
+        return
+
+    worker = threading.Thread(target=state_worker, daemon=True)
+    worker.start()
+    try:
+        with Live(layout, console=console, refresh_per_second=1, screen=True):
+            while True:
+                with state_lock:
+                    build_dashboard(dict(state))
+                ready, _, _ = select.select([sys.stdin], [], [], 1.0)
+                if not ready:
+                    continue
+                line = sys.stdin.readline()
+                if line is None:
+                    break
+                # Enter goes back; anything else is ignored so the clock keeps ticking
+                if not line.strip():
+                    break
+    finally:
+        stop_event.set()
+
     clear_screen()
 
 
