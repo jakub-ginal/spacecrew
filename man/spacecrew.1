@@ -1,4 +1,4 @@
-.TH SPACECEW 1 "2026-10-11" "spacecrew 1.2.12" "User Commands"
+.TH SPACECEW 1 "2026-10-13" "spacecrew 1.2.16" "User Commands"
 .SH NAME
 spacecrew \- Track people in space, NASA APOD, launches, ISS position, and space weather
 
@@ -10,6 +10,8 @@ spacecrew \- Track people in space, NASA APOD, launches, ISS position, and space
 [\fB\-\-clear\-cache\fR]
 [\fB\-\-offline\fR]
 [\fB\-\-no\-image\fR]
+[\fB\-\-json\fR]
+[\fB\-\-config\fR \fIDIR\fR]
 [\fB\-\-generate\-completion\fR \fI{\fBbash\fR|\fBzsh\fR|\fBfish\fR}\fR]
 
 .SH DESCRIPTION
@@ -43,6 +45,16 @@ Offline mode: use only cached data, no network requests.
 .TP
 \fB\-\-no\-image\fR
 Skip astronaut/APOD photo rendering (faster, no Pillow/chafa needed).
+
+.TP
+\fB\-\-json\fR
+Print mode output as JSON and exit (requires \fB\-\-mode\fR passes|people|launches).
+
+.TP
+\fB\-\-config\fR \fIDIR\fR
+Use a custom config/cache dir (overrides \fI~/.config/spacecrew\fR).
+Also honored via \fBSPACE_CREW_CONFIG_DIR\fR or \fBXDG_CONFIG_HOME\fR.
+Useful for testing without touching real user data.
 
 .TP
 \fB\-\-generate\-completion\fR \fI{\fBbash\fR|\fBzsh\fR|\fBfish\fR}\fR

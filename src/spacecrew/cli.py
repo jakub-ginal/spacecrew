@@ -271,7 +271,25 @@ def multi_fetch_with_progress(urls: list[tuple[str, str]], description: str = "F
 
 
 WIKIMEDIA_THUMB_WIDTH: int = 250
-CONFIG_DIR = Path.home() / ".config" / "spacecrew"
+
+
+def resolve_config_dir(explicit: str | None = None) -> Path:
+    """Resolve config dir: --config flag > SPACE_CREW_CONFIG_DIR > XDG > ~/.config/spacecrew.
+
+    Lets devs/tests point at a throwaway dir so real user data is never wiped.
+    """
+    if explicit:
+        return Path(explicit).expanduser()
+    env = os.getenv("SPACE_CREW_CONFIG_DIR")
+    if env:
+        return Path(env).expanduser()
+    xdg = os.getenv("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg).expanduser() / "spacecrew"
+    return Path.home() / ".config" / "spacecrew"
+
+
+CONFIG_DIR = resolve_config_dir()
 CACHE_DB = CONFIG_DIR / "cache.db"
 
 
@@ -360,7 +378,7 @@ class Config:
 
 class Cache:
     """Persistent SQLite cache for API responses."""
-    
+
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -380,7 +398,9 @@ class Cache:
             """)
             conn.commit()
     
-    def get(self, key: str, ttl_days: int = 30) -> dict | None:
+    def get(self, key: str, ttl_days: int = 30) -> dict | list | None:
+        if globals().get("_global_no_cache"):
+            return None
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
@@ -400,7 +420,9 @@ class Cache:
                     conn.commit()
         return None
     
-    def set(self, key: str, data: dict):
+    def set(self, key: str, data: dict | list):
+        if globals().get("_global_no_cache"):
+            return
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO cache (key, data, timestamp) VALUES (?, ?, ?)",
@@ -418,6 +440,18 @@ class Cache:
 config = Config()
 cache = Cache(CACHE_DB)
 refresh_console()
+
+
+def reinit_config(config_dir: Path):
+    """Point Config + Cache at a different dir (for --config / env override)."""
+    global CONFIG_DIR, CACHE_DB, config, cache
+    CONFIG_DIR = config_dir
+    CACHE_DB = config_dir / "cache.db"
+    config.config_file = CONFIG_DIR / "config.toml"
+    config._config = Config.DEFAULTS.copy()
+    config.load()
+    cache = Cache(CACHE_DB)
+    refresh_console()
 
 _apod_cache: dict[str, dict] = {}
 _apod_scrape_cache: dict[str, str | None] = {}
@@ -775,6 +809,24 @@ def get_nasa_api_key() -> str:
     return config.get("nasa_api_key") or "DEMO_KEY"
 
 
+def is_demo_key() -> bool:
+    return get_nasa_api_key() == "DEMO_KEY"
+
+
+_last_apod_error: str | None = None
+
+
+def nasa_hint(status: int | None) -> str:
+    """Friendly hint for NASA API failures (rate limits / flaky 500s)."""
+    if status == 429 or status == 403:
+        if is_demo_key():
+            return "DEMO_KEY is rate-limited (30 req/hr per IP). Set your own free key: export NASA_API_KEY=... (https://api.nasa.gov) — cached data shown when available."
+        return "NASA API rate limit hit (429/403). Wait a few minutes — cached data shown when available."
+    if status and 500 <= status < 600:
+        return f"api.nasa.gov returned {status} (flaky, especially for new dates). Try again or pick a previous day with 'p'."
+    return "Could not reach api.nasa.gov. Check network or try --offline for cached data."
+
+
 def fetch_apod_date(target_date: str | None):
     """Fetch APOD for specific date (YYYY-MM-DD) or today if None."""
     cache_key = target_date or "today"
@@ -798,6 +850,8 @@ def fetch_apod_date(target_date: str | None):
     params = {"api_key": get_nasa_api_key(), "date": target_date}
 
     url = f"{base_url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+    global _last_apod_error
+    _last_apod_error = None
     try:
         res = fetch_with_retry(url, timeout=10)
         if res and res.status_code == 200:
@@ -805,8 +859,10 @@ def fetch_apod_date(target_date: str | None):
             _apod_cache[mem_key] = data
             cache.set(mem_key, data)
             return data
+        if res is not None:
+            _last_apod_error = nasa_hint(res.status_code)
     except Exception:
-        pass
+        _last_apod_error = nasa_hint(None)
     return None
 
 
@@ -850,6 +906,7 @@ def show_apod_view(target_date: str | None = None):
         apod = fetch_apod_date(target_date)
         if not apod:
             console.print("[bold red]Error: Could not fetch APOD data[/bold red]")
+            console.print(f"[yellow]{_last_apod_error or nasa_hint(None)}[/yellow]")
             input("\nPress Enter to return to menu...")
             return
 
@@ -1143,13 +1200,13 @@ def fetch_space_weather(limit: int = 5) -> dict:
     if _space_weather_cache is not None:
         return _space_weather_cache
     
-    cached = cache.get(cache_key, config.get("cache_ttl_days", 1))
+    cached = cache.get(cache_key, config.get("cache_ttl_days", 30))
     if cached:
         _space_weather_cache = cached
         return cached
-    
+
     if _global_offline:
-        return {}
+        return {"flares": [], "cmes": [], "kp_index": [], "forecast": "", "max_kp": 0, "storm_level": "Unknown (offline)"}
     
     result = {"flares": [], "cmes": [], "kp_index": [], "forecast": ""}
     
@@ -1820,7 +1877,6 @@ def get_rarity_bonus(name: str) -> float:
 
 
 def show_satellite_passes():
-    """Show satellite passes menu and predictions."""
     """Show satellite passes menu and predictions."""
     from rich.prompt import Prompt
     
@@ -3044,6 +3100,7 @@ def handle_people_in_space():
 
 _global_offline = False
 _global_no_images = False
+_global_no_cache = False
 
 
 def parse_args():
@@ -3073,6 +3130,12 @@ def parse_args():
     )
     parser.add_argument(
         "--json", action="store_true", help="Print mode output as JSON and exit (requires --mode)"
+    )
+    parser.add_argument(
+        "--config",
+        metavar="DIR",
+        default=None,
+        help="Use a custom config/cache dir (overrides ~/.config/spacecrew; env: SPACE_CREW_CONFIG_DIR, XDG_CONFIG_HOME)",
     )
     parser.add_argument(
         "--generate-completion",
@@ -3127,8 +3190,23 @@ def cmd_json_output(mode: str):
 
 
 def main():
-    global _global_offline, _global_no_images
+    global _global_offline, _global_no_images, _global_no_cache
     args = parse_args()
+
+    # Custom config dir must come first (re-points Config + Cache).
+    cfg_dir = getattr(args, "config", None) or os.getenv("SPACE_CREW_CONFIG_DIR") or (
+        Path(os.getenv("XDG_CONFIG_HOME")).expanduser() / "spacecrew" if os.getenv("XDG_CONFIG_HOME") else None
+    )
+    if getattr(args, "config", None):
+        reinit_config(resolve_config_dir(getattr(args, "config", None)))
+    elif os.getenv("SPACE_CREW_CONFIG_DIR") or os.getenv("XDG_CONFIG_HOME"):
+        env_dir = resolve_config_dir()
+        if env_dir != Path.home() / ".config" / "spacecrew":
+            reinit_config(env_dir)
+
+    if getattr(args, "no_cache", False):
+        _global_no_cache = True
+        console.print("[yellow]Cache disabled for this run (--no-cache)[/yellow]")
 
     if getattr(args, 'generate_completion', None):
         shell = args.generate_completion

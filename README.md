@@ -45,6 +45,9 @@ Start directly in a mode:
 spacecrew --mode passes
 spacecrew --mode apod --offline
 spacecrew --mode iss --no-image
+spacecrew --mode people --json
+spacecrew --mode launches --json
+spacecrew --mode passes --json
 ```
 
 ### Time in Space
@@ -72,6 +75,9 @@ spacecrew --offline      # cached data only, no network
 spacecrew --no-cache     # disable persistent cache for this run
 spacecrew --clear-cache  # clear expired cache entries
 spacecrew --no-image     # skip photo rendering
+spacecrew --json --mode people  # JSON output (passes|people|launches)
+spacecrew --config /tmp/spacecrew-test  # isolated config/cache dir for testing
+SPACE_CREW_CONFIG_DIR=/tmp/spacecrew-test spacecrew  # same via env
 spacecrew --generate-completion bash  # bash|zsh|fish
 man spacecrew            # manual page
 ```
