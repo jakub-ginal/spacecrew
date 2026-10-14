@@ -78,6 +78,7 @@ spacecrew --no-image     # skip photo rendering
 spacecrew --json --mode people  # JSON output (passes|people|launches)
 spacecrew --config /tmp/spacecrew-test  # isolated config/cache dir for testing
 SPACE_CREW_CONFIG_DIR=/tmp/spacecrew-test spacecrew  # same via env
+spacecrew --timezone Europe/Warsaw  # local times (auto-detected on first run)
 spacecrew --generate-completion bash  # bash|zsh|fish
 man spacecrew            # manual page
 ```

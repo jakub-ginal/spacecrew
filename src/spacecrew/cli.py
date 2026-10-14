@@ -306,6 +306,7 @@ class Config:
         "observer_lon": None,
         "observer_alt": 0,
         "favorites": [],
+        "timezone": None,
     }
     
     def __init__(self):
@@ -335,8 +336,10 @@ class Config:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         try:
             import tomli_w
+            # TOML has no null: skip unset (None) values, load() restores defaults.
+            clean = {k: v for k, v in self._config.items() if v is not None}
             with open(self.config_file, "wb") as f:
-                tomli_w.dump(self._config, f)
+                tomli_w.dump(clean, f)
         except Exception:
             pass
 
@@ -452,6 +455,94 @@ def reinit_config(config_dir: Path):
     config.load()
     cache = Cache(CACHE_DB)
     refresh_console()
+
+
+def detect_local_timezone() -> str | None:
+    """Guess the system IANA timezone (e.g. Europe/Warsaw), or None."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return None
+    # $TZ is the most explicit hint
+    tz_env = os.getenv("TZ")
+    if tz_env:
+        try:
+            ZoneInfo(tz_env)
+            return tz_env
+        except Exception:
+            pass
+    # /etc/localtime is usually a symlink into /usr/share/zoneinfo/<Area>/<City>
+    try:
+        link = Path("/etc/localtime")
+        if link.is_symlink():
+            target = os.readlink(link)
+            marker = "zoneinfo/"
+            if marker in target:
+                name = target.split(marker, 1)[1]
+                try:
+                    ZoneInfo(name)
+                    return name
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return None
+
+
+def get_active_timezone():
+    """Return the configured/local timezone, falling back to UTC."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return timezone.utc
+    name = config.get("timezone") or detect_local_timezone()
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return timezone.utc
+
+
+def tz_abbr() -> str:
+    """Short timezone name for the active zone (e.g. CEST, UTC)."""
+    try:
+        now = datetime.now(get_active_timezone())
+        abbr = now.strftime("%Z")
+        return abbr or "local"
+    except Exception:
+        return "local"
+
+
+def _as_utc(dt) -> datetime:
+    """Treat naive datetimes as UTC, convert aware ones to UTC."""
+    if dt is None:
+        return datetime.now(timezone.utc)
+    if getattr(dt, "tzinfo", None) is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def format_dt_local(dt, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Format a UTC datetime in the active local timezone (short, no suffix)."""
+    try:
+        return _as_utc(dt).astimezone(get_active_timezone()).strftime(fmt)
+    except Exception:
+        try:
+            return dt.strftime(fmt)
+        except Exception:
+            return str(dt)
+
+
+def format_dt_detail(dt) -> str:
+    """Full timestamp: local time + abbrev + UTC in parens (detail views)."""
+    try:
+        utc = _as_utc(dt)
+        local = utc.astimezone(get_active_timezone())
+        abbr = local.strftime("%Z") or "local"
+        return f"{local.strftime('%Y-%m-%d %H:%M')} {abbr} ({utc.strftime('%H:%M')} UTC)"
+    except Exception:
+        return str(dt)
 
 _apod_cache: dict[str, dict] = {}
 _apod_scrape_cache: dict[str, str | None] = {}
@@ -680,7 +771,7 @@ def build_tree_menu(people_count, iss_groups, tiangong_groups):
     return tree, missions
 
 
-def fetch_photo_panel(url):
+def fetch_photo_panel(url, width: int = 28, height: int = 16):
     if not url:
         return Panel(Text("No photo", style="dim red"), title="Photo", expand=False)
     if _global_no_images:
@@ -693,16 +784,16 @@ def fetch_photo_panel(url):
         res = fetch_with_retry(url, timeout=5)
         if res and res.status_code == 200:
             img = Image.open(BytesIO(res.content)).convert("RGB")
-            width, height = img.size
+            w, h = img.size
             pixels = img.tobytes()
 
             config = chafa.CanvasConfig()
-            config.width = 28
-            config.height = 16
+            config.width = width
+            config.height = height
 
             canvas = chafa.Canvas(config)
             canvas.draw_all_pixels(
-                chafa.PixelType.CHAFA_PIXEL_RGB8, pixels, width, height, width * 3
+                chafa.PixelType.CHAFA_PIXEL_RGB8, pixels, w, h, w * 3
             )
             out = canvas.print().decode("utf-8")
 
@@ -730,7 +821,7 @@ def calculate_space_experience(launched_timestamp, previous_days):
         return "N/A", f"{previous_days} days"
 
     dt = datetime.fromtimestamp(launched_timestamp, tz=timezone.utc)
-    launched_str = dt.strftime("%Y-%m-%d %H:%M UTC")
+    launched_str = format_dt_detail(dt)
 
     current_mission_days = (time.time() - launched_timestamp) / 86400
     total_days = previous_days + current_mission_days
@@ -1145,7 +1236,7 @@ def format_iss_position(data: dict) -> str:
     timestamp = data.get("timestamp", 0)
     
     dt = datetime.fromtimestamp(timestamp, tz=timezone.utc) if timestamp else datetime.now(timezone.utc)
-    time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    time_str = format_dt_detail(dt)
     
     location_name = "Unknown"
     try:
@@ -1305,7 +1396,7 @@ def create_space_weather_table(data: dict) -> Table:
         flare_text = ""
         for i, flare in enumerate(flares[:3]):
             cls = format_flare_class(flare.get("classType", ""))
-            peak = flare.get("peakTime", "").replace("T", " ").replace("Z", " UTC")
+            peak = format_api_timestamp(flare.get("peakTime", ""))
             region = flare.get("activeRegionNum", "N/A")
             flare_text += f"{cls}  {peak}  AR{region}\n"
         table.add_row("Recent Flares", flare_text.strip())
@@ -1316,7 +1407,7 @@ def create_space_weather_table(data: dict) -> Table:
     if cmes:
         cme_text = ""
         for i, cme in enumerate(cmes[:3]):
-            start = cme.get("startTime", "").replace("T", " ").replace("Z", " UTC")
+            start = format_api_timestamp(cme.get("startTime", ""))
             speed = "N/A"
             if cme.get("cmeAnalyses"):
                 speed = f"{cme['cmeAnalyses'][0].get('speed', 0):.0f} km/s"
@@ -1572,8 +1663,10 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                     
                     cos_g = cos(gast_rad)
                     sin_g = sin(gast_rad)
-                    sat_x = r[0] * cos_g - r[1] * sin_g
-                    sat_y = r[0] * sin_g + r[1] * cos_g
+                    # TEME -> pseudo-Earth-fixed: R3(GMST) per Vallado
+                    # (x' = x*cos + y*sin, y' = -x*sin + y*cos)
+                    sat_x = r[0] * cos_g + r[1] * sin_g
+                    sat_y = -r[0] * sin_g + r[1] * cos_g
                     sat_z = r[2]
                     
                     dx = sat_x - obs_x
@@ -1613,7 +1706,7 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                     elif not visible and in_pass:
                         in_pass = False
                         pass_end_az = azimuth
-                        if pass_start and pass_max_el > 15:  # Only keep passes with decent max elevation
+                        if pass_start and pass_max_el > 10:  # keep everything tracked above the horizon filter
                             duration = (check_time - pass_start).total_seconds() / 60
                             if duration > 1:  # At least 1 minute
                                 std_mag = get_std_magnitude(sat_name)
@@ -1623,8 +1716,9 @@ def calculate_visible_passes(satellites: list[dict], obs_lat: float, obs_lon: fl
                                 gast_max_rad = radians(gast_max)
                                 cos_g = cos(gast_max_rad)
                                 sin_g = sin(gast_max_rad)
-                                sat_x = pass_max_pos[0] * cos_g - pass_max_pos[1] * sin_g
-                                sat_y = pass_max_pos[0] * sin_g + pass_max_pos[1] * cos_g
+                                # Same TEME -> pseudo-Earth-fixed rotation as above
+                                sat_x = pass_max_pos[0] * cos_g + pass_max_pos[1] * sin_g
+                                sat_y = -pass_max_pos[0] * sin_g + pass_max_pos[1] * cos_g
                                 sat_z = pass_max_pos[2]
                                 
                                 dx = sat_x - obs_x
@@ -2095,7 +2189,7 @@ def predict_passes(lat: float, lon: float, alt: float, days: int = 3, mode: str 
             console.print(f"[title]Tonight's Best[/title]")
         else:
             console.print(f"[title]All Passes ({days} days)[/title]")
-        console.print(f"Location: {lat:.4f}, {lon:.4f}, {alt}m\n")
+        console.print(f"Location: {lat:.4f}, {lon:.4f}, {alt}m  (times in {tz_abbr()})\n")
         
         total_passes = sum(len(v) for v in passes_by_sat.values())
         console.print(f"[muted]{len(passes_by_sat)} satellites, {total_passes} total passes[/muted]\n")
@@ -2289,14 +2383,14 @@ def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
                 tx_text.append(f"  {desc}", style="muted")
             tx_text.append("\n")
         console.print(Panel(tx_text, border_style="dim", padding=(0, 1), expand=True))
-    console.print(f"[dim]Location: {lat:.4f}, {lon:.4f}  \u2022  Next 7 Days[/dim]\n")
+    console.print(f"[dim]Location: {lat:.4f}, {lon:.4f}  \u2022  Next 7 Days  \u2022  Times in {tz_abbr()}[/dim]\n")
 
     if not passes:
         console.print(Panel("[warning]No visible passes in the next 7 days[/warning]", border_style="dim"))
     else:
         next_pass = passes[0]
-        start_str = next_pass["start"].strftime("%m-%d %H:%M")
-        end_str = next_pass["end"].strftime("%H:%M")
+        start_str = format_dt_local(next_pass["start"], "%m-%d %H:%M")
+        end_str = format_dt_local(next_pass["end"], "%H:%M")
         max_el = next_pass["max_elevation"]
         start_az = next_pass["start_azimuth"]
         end_az = next_pass["end_azimuth"]
@@ -2340,8 +2434,8 @@ def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
         table.add_column("Vis", style="green", width=8, justify="center")
 
         for p in passes[:15]:
-            start_str = p["start"].strftime("%m-%d %H:%M")
-            end_str = p["end"].strftime("%H:%M")
+            start_str = format_dt_local(p["start"], "%m-%d %H:%M")
+            end_str = format_dt_local(p["end"], "%H:%M")
             max_el = p["max_elevation"]
             start_az = p["start_azimuth"]
             end_az = p["end_azimuth"]
@@ -2352,7 +2446,7 @@ def _show_satellite_detail_once(sat: dict, lat: float, lon: float, alt: float):
             cloud_pct = p.get("cloud_cover")
             moon_data = p.get("moon_phase")
 
-            date_str = p["start"].strftime("%m-%d")
+            date_str = format_dt_local(p["start"], "%m-%d")
             time_str = f"{start_str[-5:]}-{end_str[-5:]}"
 
             mag_display = f"{mag:.1f}" if mag < 99 else "\u2014"
@@ -2395,14 +2489,36 @@ def show_satellite_detail(sat: dict, lat: float, lon: float, alt: float):
             return
 
 def format_launch_datetime(iso_str: str) -> str:
-    """Format ISO datetime to readable local time."""
+    """Format ISO datetime to readable local time (compact, for lists)."""
     if not iso_str:
         return "TBD"
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
+        return f"{format_dt_local(dt)} {tz_abbr()}"
     except Exception:
         return iso_str
+
+
+def format_launch_datetime_detail(iso_str: str) -> str:
+    """Format ISO datetime with local time + UTC (detail views)."""
+    if not iso_str:
+        return "TBD"
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return format_dt_detail(dt)
+    except Exception:
+        return iso_str
+
+
+def format_api_timestamp(iso_str: str) -> str:
+    """Format an API ISO timestamp (space weather etc.) in local time."""
+    if not iso_str:
+        return "N/A"
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return f"{format_dt_local(dt)} {tz_abbr()}"
+    except Exception:
+        return iso_str.replace("T", " ").replace("Z", " UTC")
 
 
 def get_launch_countdown(window_start: str) -> str:
@@ -2492,7 +2608,7 @@ def create_launches_table(launches: list[dict]) -> Table:
     table.add_column("#", style="number", justify="right", width=4, no_wrap=True)
     table.add_column("Mission", style="name", min_width=40, overflow="fold")
     table.add_column("Rocket / Provider", style="rocket", min_width=25, overflow="fold")
-    table.add_column("Date (UTC)", style="date", width=18, no_wrap=True)
+    table.add_column("Date", style="date", width=22, no_wrap=True)
     table.add_column("Status", style="status", width=12, no_wrap=True)
 
     for idx, launch in enumerate(launches, 1):
@@ -2593,8 +2709,8 @@ def create_passes_panel_list(sorted_sats: list, max_passes_per_sat: int = 3) -> 
         text.append(group_text + "\n", style="muted")
 
         for i, p in enumerate(sat_passes[:max_passes_per_sat]):
-            start_str = p["start"].strftime("%m-%d %H:%M")
-            end_str = p["end"].strftime("%H:%M")
+            start_str = format_dt_local(p["start"], "%m-%d %H:%M")
+            end_str = format_dt_local(p["end"], "%H:%M")
             max_el = p["max_elevation"]
             start_az = p["start_azimuth"]
             end_az = p["end_azimuth"]
@@ -2657,8 +2773,8 @@ def create_launch_detail_table(launch: dict) -> Table:
     location = pad.get("location", {})
     table.add_row("Location", f"{location.get('name', 'N/A')}, {location.get('country_code', 'N/A')}")
 
-    table.add_row("Window Start", format_launch_datetime(launch.get("window_start", "")))
-    table.add_row("Window End", format_launch_datetime(launch.get("window_end", "")))
+    table.add_row("Window Start", format_launch_datetime_detail(launch.get("window_start", "")))
+    table.add_row("Window End", format_launch_datetime_detail(launch.get("window_end", "")))
 
     status = launch.get("status", {})
     table.add_row("Status", status.get("name", "N/A"))
@@ -2691,6 +2807,45 @@ def create_launch_detail_table(launch: dict) -> Table:
         table.add_row("Links", "[dim]No links available yet[/dim]")
 
     return table
+
+
+_launch_detail_cache: dict[str, dict] = {}
+
+
+def fetch_launch_detail(launch: dict) -> dict | None:
+    """Fetch full launch object (hi-res rocket photo etc.), cached 7 days.
+
+    Compact list mode omits nested fields like
+    rocket.configuration.image_url; the per-launch endpoint has them.
+    Only called on demand from the photo view, never for whole lists.
+    """
+    launch_id = launch.get("id") or ""
+    url = launch.get("url") or ""
+    if not url:
+        return None
+    if launch_id and launch_id in _launch_detail_cache:
+        return _launch_detail_cache[launch_id]
+    cached = cache.get(f"launch_detail:{launch_id or url}", 7)
+    if cached:
+        if launch_id:
+            _launch_detail_cache[launch_id] = cached
+        return cached
+    if _global_offline:
+        return None
+    try:
+        res = fetch_with_retry(url, timeout=10)
+        if res and res.status_code == 200:
+            data = res.json()
+            if launch_id:
+                _launch_detail_cache[launch_id] = data
+            try:
+                cache.set(f"launch_detail:{launch_id or url}", data)
+            except Exception:
+                pass
+            return data
+    except Exception:
+        pass
+    return None
 
 
 def show_launches_list():
@@ -2731,16 +2886,56 @@ def show_launches_list():
                 show_launch_detail(launches[idx])
 
 
+def show_rocket_photo_view(launch: dict):
+    """Show rocket photo view: big photo + minimal info (name, agency, pad)."""
+    clear_screen()
+    rocket = launch.get("rocket", {}).get("configuration", {})
+    provider = launch.get("launch_service_provider", {})
+    pad = launch.get("pad", {})
+    location = pad.get("location", {})
+
+    name = rocket.get("name") or launch.get("name", "Unknown")
+    agency = provider.get("name", "N/A")
+    pad_name = pad.get("name", "N/A")
+    country = location.get("country_code", "")
+    where = f"{pad_name} ({country})" if country else pad_name
+    countdown = get_launch_countdown(launch.get("window_start", ""))
+
+    # Best source: full launch detail carries the hi-res rocket
+    # configuration photo; compact list mode only has a small image.
+    img_url = ""
+    full = fetch_launch_detail(launch)
+    if full:
+        img_url = full.get("rocket", {}).get("configuration", {}).get("image_url") or ""
+    if not img_url:
+        img_url = rocket.get("image_url") or launch.get("image") or ""
+    photo_panel = fetch_photo_panel(img_url, width=48, height=24)
+
+    info_text = Text()
+    info_text.append(f"{name}\n", style="title")
+    info_text.append(f"{agency}\n", style="rocket")
+    info_text.append(f"{where}\n", style="text")
+    info_text.append(f"{format_launch_datetime_detail(launch.get('window_start', ''))}\n", style="date")
+    if countdown:
+        info_text.append_text(Text.from_markup(countdown))
+
+    info_panel = Panel(info_text, title="Rocket", expand=False, border_style="white")
+    console.print(Columns([photo_panel, info_panel]))
+    input("\nPress Enter to return...")
+
+
 def show_launch_detail(launch: dict):
     """Show detailed view of a launch."""
     while True:
         clear_screen()
         console.print(create_launch_detail_table(launch))
 
-        console.print("\n[warning]Actions:[/warning]  [info]w[/info] - Open webcast  [info]Enter[/info] - Back")
+        console.print("\n[warning]Actions:[/warning]  [info]p[/info] - Rocket photo  [info]w[/info] - Open webcast  [info]Enter[/info] - Back")
         choice = input("> ").strip().lower()
 
-        if choice == "w" and launch.get("webcast_live") and launch.get("streams"):
+        if choice == "p":
+            show_rocket_photo_view(launch)
+        elif choice == "w" and launch.get("webcast_live") and launch.get("streams"):
             url = launch["streams"][0].get("url", "")
             if url:
                 webbrowser.open(url)
@@ -2847,7 +3042,7 @@ def show_dashboard():
         
         header_text = Text()
         header_text.append(" SPACECREW DASHBOARD", style="highlight")
-        header_text.append(f"  {now.strftime('%Y-%m-%d %H:%M:%S UTC')}", style="muted")
+        header_text.append(f"  {format_dt_local(now, '%Y-%m-%d %H:%M:%S')} {tz_abbr()}", style="muted")
         layout["header"].update(Align.center(header_text))
         
         iss_data = data.get("iss")
@@ -2857,7 +3052,7 @@ def show_dashboard():
             iss_text.append(" ISS (ZARYA)\n", style="title")
             iss_text.append(f" Lat: {pos.get('latitude', 'N/A')}  Lon: {pos.get('longitude', 'N/A')}\n", style="text")
             iss_text.append(f" Alt: {iss_data.get('altitude', 'N/A')} km  Vel: {iss_data.get('velocity', 'N/A')} km/h\n", style="text")
-            iss_text.append(f" Vis: {iss_data.get('visibility', 'N/A')}  Updated: {now.strftime('%H:%M:%S UTC')}", style="muted")
+            iss_text.append(f" Vis: {iss_data.get('visibility', 'N/A')}  Updated: {format_dt_local(now, '%H:%M:%S')} {tz_abbr()}", style="muted")
             layout["iss"].update(Panel(iss_text, title="[info]ISS[/info]", border_style="white", padding=(0, 1)))
         else:
             layout["iss"].update(Panel("[error]ISS data unavailable[/error]", title="[info]ISS[/info]", border_style="white"))
@@ -2873,7 +3068,7 @@ def show_dashboard():
         passes = data.get("passes") or []
         if passes:
             for p in passes[:5]:
-                start_str = p["start"].strftime("%m-%d %H:%M UTC")
+                start_str = f"{format_dt_local(p['start'], '%m-%d %H:%M')} {tz_abbr()}"
                 mag = p.get("magnitude", 99)
                 q = p.get("quality", 0)
                 mag_str = f" mag {mag:.1f}" if mag < 99 else ""
@@ -2899,7 +3094,7 @@ def show_dashboard():
             if flares:
                 for f in flares[:2]:
                     cls = f.get("classType", "N/A")
-                    peak = f.get("peakTime", "").replace("T", " ").replace("Z", " UTC")
+                    peak = format_api_timestamp(f.get("peakTime", ""))
                     weather_text.append(f" {cls}  {peak}\n", style="text")
             kp = weather_data.get("kp_index", [])
             if kp:
@@ -3138,6 +3333,12 @@ def parse_args():
         help="Use a custom config/cache dir (overrides ~/.config/spacecrew; env: SPACE_CREW_CONFIG_DIR, XDG_CONFIG_HOME)",
     )
     parser.add_argument(
+        "--timezone",
+        metavar="ZONE",
+        default=None,
+        help="IANA timezone for displayed times (e.g. Europe/Warsaw); saved to config",
+    )
+    parser.add_argument(
         "--generate-completion",
         choices=["bash", "zsh", "fish"],
         help="Generate shell completion script for the specified shell",
@@ -3206,7 +3407,8 @@ def main():
 
     if getattr(args, "no_cache", False):
         _global_no_cache = True
-        console.print("[yellow]Cache disabled for this run (--no-cache)[/yellow]")
+        if not getattr(args, "json", False):
+            console.print("[yellow]Cache disabled for this run (--no-cache)[/yellow]")
 
     if getattr(args, 'generate_completion', None):
         shell = args.generate_completion
@@ -3218,10 +3420,32 @@ def main():
             print(argcomplete.shellcode(['fish']))
         return
 
+    # Timezone: explicit flag wins and is saved; otherwise auto-detect once.
+    # (Silent in --json mode so stdout stays pure JSON.)
+    tz_flag = getattr(args, "timezone", None)
+    json_mode = getattr(args, "json", False)
+    if tz_flag:
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(tz_flag)
+            config.set("timezone", tz_flag)
+            if not json_mode:
+                console.print(f"[green]Timezone set to {tz_flag}[/green]")
+        except Exception:
+            if not json_mode:
+                console.print(f"[error]Unknown timezone '{tz_flag}' (e.g. Europe/Warsaw, America/New_York)[/error]")
+    elif not config.get("timezone"):
+        detected = detect_local_timezone()
+        if detected:
+            config.set("timezone", detected)
+            if not json_mode:
+                console.print(f"[muted]Detected timezone: {detected}[/muted]")
+
     if args.offline:
         _global_offline = True
-        console.print("[yellow]Offline mode: using cached data only[/yellow]")
-        time.sleep(0.5)
+        if not json_mode:
+            console.print("[yellow]Offline mode: using cached data only[/yellow]")
+            time.sleep(0.5)
 
     if getattr(args, "no_image", False):
         _global_no_images = True
