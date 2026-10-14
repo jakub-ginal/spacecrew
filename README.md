@@ -22,6 +22,8 @@ pipx install .
 
 Requires Python 3.10+
 
+> **Recommended:** CachyOS, Ubuntu, Debian. Should work on most Linux distros, macOS, and Windows (terminal photos unavailable on Windows).
+
 ## Usage
 
 ### Quickstart
