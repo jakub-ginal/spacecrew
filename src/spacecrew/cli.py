@@ -684,6 +684,16 @@ USER_AGENT = (
 
 
 def clear_screen():
+    if os.name == "nt":
+        # Windows: plain cls is the only reliable clear across
+        # conhost and Windows Terminal. Rich sequences + the
+        # scrollback erase below misbehave on legacy consoles and
+        # leave menus stacking on top of each other.
+        try:
+            os.system("cls")
+        except Exception:
+            pass
+        return
     try:
         console.clear()
         if sys.stdout.isatty():
@@ -691,7 +701,7 @@ def clear_screen():
             sys.stdout.write("\x1b[3J")
             sys.stdout.flush()
     except Exception:
-        os.system("cls" if os.name == "nt" else "clear")
+        os.system("clear")
 
 
 def wait_for_exit_key(timeout: float = 1.0) -> bool:
@@ -3214,7 +3224,9 @@ def show_dashboard():
     worker = threading.Thread(target=state_worker, daemon=True)
     worker.start()
     try:
-        with Live(layout, console=console, refresh_per_second=1, screen=True):
+        # Windows consoles stack alternate-screen frames on top of each
+        # other, so use scrolling mode there; POSIX keeps fullscreen.
+        with Live(layout, console=console, refresh_per_second=1, screen=(os.name != "nt")):
             while True:
                 with state_lock:
                     build_dashboard(dict(state))
