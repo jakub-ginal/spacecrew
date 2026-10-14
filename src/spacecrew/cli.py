@@ -662,7 +662,18 @@ def _spacecrew_version() -> str:
     try:
         return importlib.metadata.version("spacecrew")
     except importlib.metadata.PackageNotFoundError:
-        return "unknown"
+        pass
+    # Dev checkout without installed metadata: read pyproject next to the package
+    try:
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        for line in pyproject.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("version"):
+                _, _, value = line.partition("=")
+                return value.strip().strip("\"'")
+    except Exception:
+        pass
+    return "unknown"
 
 
 USER_AGENT = (
@@ -681,6 +692,43 @@ def clear_screen():
             sys.stdout.flush()
     except Exception:
         os.system("cls" if os.name == "nt" else "clear")
+
+
+def wait_for_exit_key(timeout: float = 1.0) -> bool:
+    """Wait up to timeout seconds for Enter; True = exit dashboard.
+
+    POSIX uses select on stdin (unchanged behavior); Windows consoles
+    can't select() on stdin, so poll msvcrt instead. Other keys are
+    ignored so the clock keeps ticking; EOF also exits.
+    """
+    if os.name == "nt":
+        try:
+            import msvcrt
+        except ImportError:
+            time.sleep(timeout)
+            return False
+        end = time.time() + timeout
+        while time.time() < end:
+            if msvcrt.kbhit():
+                try:
+                    ch = msvcrt.getwch()
+                except Exception:
+                    return True
+                if ch in ("\r", "\n"):
+                    return True
+                if ch == "\x03":
+                    raise KeyboardInterrupt
+            time.sleep(0.05)
+        return False
+    import select
+    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    if not ready:
+        return False
+    line = sys.stdin.readline()
+    if not line:
+        return True  # EOF
+    # Enter goes back; anything else is ignored so the clock keeps ticking
+    return not line.strip()
 
 
 def to_thumb_url(original_url: str, width: int) -> str:
@@ -2954,7 +3002,6 @@ def show_dashboard():
     from rich.panel import Panel
     from rich.text import Text
     import sys
-    import select
     import threading
     
     lat = config.get("observer_lat")
@@ -3171,14 +3218,7 @@ def show_dashboard():
             while True:
                 with state_lock:
                     build_dashboard(dict(state))
-                ready, _, _ = select.select([sys.stdin], [], [], 1.0)
-                if not ready:
-                    continue
-                line = sys.stdin.readline()
-                if line is None:
-                    break
-                # Enter goes back; anything else is ignored so the clock keeps ticking
-                if not line.strip():
+                if wait_for_exit_key(1.0):
                     break
     finally:
         stop_event.set()
