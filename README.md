@@ -1,8 +1,14 @@
 # spacecrew
 See who is in space right now, catch the ISS over your house, and track launches - all from your terminal.
 
+[spacecrew-screenrecord-github.webm](https://github.com/user-attachments/assets/191ff0e4-c1a8-414a-a3c7-60f7fc9b29b1)
+
+<details>
+<summary><b>Main Page</b></summary>
+  
 <img width="800" height="600" alt="753_1x_shots_so" src="https://github.com/user-attachments/assets/64100112-107a-423d-afda-15fcd280c939" />
 
+</details>
 
 ## Install
 
@@ -228,6 +234,8 @@ man spacecrew
 pip uninstall spacecrew
 ```
 
-## Data sources
+## Data sources and info
 
 People data by [corquaid](https://github.com/corquaid/international-space-station-APIs) · launches by [The Space Devs](https://thespacedevs.com) · orbits by [CelesTrak](https://celestrak.org) · satellite metadata by [SatNOGS](https://db.satnogs.org) · imagery by [NASA APOD](https://apod.nasa.gov) · weather by [NOAA SWPC](https://www.swpc.noaa.gov) · clouds by [Open-Meteo](https://open-meteo.com)
+
+*AI was used to help with solving small problems.*
