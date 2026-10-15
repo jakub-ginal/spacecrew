@@ -21,9 +21,7 @@ pip install spacecrew
 Or install from source with [pipx](https://pipx.pypa.io/):
 
 ```bash
-git clone https://github.com/jakub-ginal/spacecrew
-cd spacecrew
-pipx install .
+pipx install spacecrew
 ```
 
 Requires Python 3.10+
